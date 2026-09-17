@@ -1,0 +1,50 @@
+# Secrets
+.env
+.env.local
+.env.*.local
+*.pem
+*.key
+credentials*.json
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.venv/
+venv/
+env/
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+dist/
+build/
+
+# Node
+frontend/node_modules/
+frontend/dist/
+npm-debug.log*
+
+# Runtime data
+data/
+backend/data/
+*.db
+*.sqlite
+*.sqlite3
+
+# Generated PDFs may be rebuilt; keep source markdown
+# (committed PDFs in knowledge/pdfs are allowed)
+
+# OS / IDE
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+
+# Downloaded embedding caches
+.cache/
