@@ -23,7 +23,7 @@ Land managers often receive generic chatbot advice that sounds scientific but is
 5. Search ChromaDB (`all-MiniLM-L6-v2`) and rerank with BM25.
 6. Drop hits below the relevance threshold.
 7. Call OpenAlex only if the knowledge base is weak/missing or the user asked for studies.
-8. Send selected evidence to Ollama (`llama3.2:3b` by default).
+8. Send selected evidence to the configured LLM: local Ollama (`llama3.2:3b`) or a hosted Chat Completions API (Groq/OpenAI).
 9. Validate claims against retrieved passages; unsupported statements are not shown as facts.
 10. Return a grounded answer, recommendation block, and separate internal vs external source lists.
 
@@ -75,6 +75,7 @@ Aaranya is a FastAPI RAG service plus a React/Vite app. The model is the author 
 | sentence-transformers `all-MiniLM-L6-v2` | 384-d embeddings |
 | rank-bm25 | Lexical rerank of Chroma hits |
 | Ollama (`llama3.2:3b` default) | Local LLM |
+| Groq / OpenAI Chat Completions | Hosted LLM for Render production |
 | OpenAlex (optional) | External literature lookup |
 | Nominatim | Optional place search for the map |
 | jsPDF | Client-side action-plan PDF |
@@ -382,9 +383,12 @@ Placeholders only:
 |---|---|
 | `APP_ENV` | `development` / `production` / `test` |
 | `API_HOST` / `API_PORT` | Bind address; cloud `PORT` wins if set |
-| `LLM_PROVIDER` | `ollama` (default) |
-| `OLLAMA_BASE_URL` | Local `http://localhost:11434`; Compose `http://ollama:11434` |
+| `LLM_PROVIDER` | `ollama` locally; `groq` on Render |
+| `OLLAMA_BASE_URL` | Local `http://localhost:11434` |
 | `OLLAMA_MODEL` | Default `llama3.2:3b` |
+| `GROQ_API_KEY` | Backend-only hosted key (never `VITE_`) |
+| `GROQ_MODEL` | Default `llama-3.1-8b-instant` |
+| `OPENAI_API_KEY` | Optional paid hosted provider |
 | `DATA_DIR` / `SQLITE_PATH` / `CHROMA_PATH` | Runtime stores |
 | `KNOWLEDGE_DIR` / `SOURCE_DIR` / `PDF_DIR` | Knowledge files |
 | `ADMIN_API_TOKEN` | `your-long-random-admin-token-here` |
@@ -440,20 +444,26 @@ Chat on the live site will fail until FastAPI is hosted elsewhere and this varia
 
 ## Backend Deployment
 
-Run FastAPI + Ollama on a Docker-capable Linux VM (about 8–16 GB RAM). Example:
+Local live chat uses Ollama. Render Free cannot run Ollama. Production uses the same FastAPI RAG pipeline with `LLM_PROVIDER=groq` (or `openai`).
 
-```bash
-export ADMIN_API_TOKEN=your-long-random-admin-token-here
-export FRONTEND_ORIGIN=https://YOUR-NETLIFY-SITE.netlify.app
-export CORS_ORIGINS=https://YOUR-NETLIFY-SITE.netlify.app,http://127.0.0.1:5173,http://localhost:5173
-docker compose up --build
-```
+### Render Free Web Service
 
-Compose starts `api` and `ollama`, pulls `OLLAMA_MODEL` (default `llama3.2:3b`) on first boot, and stores SQLite/Chroma/uploaded PDFs in `aaranya-data` and models in `ollama-data`.
+1. Create a Web Service from https://github.com/AsthaPatil-akp/Aaranya (`render.yaml` is in the repo).
+2. Root directory: repository root.
+3. Build: `pip install -r backend/requirements.txt`
+4. Start: `uvicorn app.main:app --host 0.0.0.0 --port $PORT`
+5. Set `PYTHONPATH=backend`.
+6. Set backend env vars (see below). Put `GROQ_API_KEY` only on Render, never in Netlify/`VITE_*`.
+7. After the first deploy, copy the `https://….onrender.com` origin into Netlify `VITE_API_URL` and redeploy the frontend.
 
-Give the API a public HTTPS URL, then put that URL in Netlify `VITE_API_URL`.
+`GET https://YOUR-RENDER-URL/health` should return `{"status":"ok"}`.  
+`GET https://YOUR-RENDER-URL/api/health` should show `llm_provider=groq` and `llm_available=true` when the Groq key is set.
 
-This repository does **not** include a live backend URL.
+Render Free sleeps after idle time, has an ephemeral disk (Chroma/SQLite rebuild on boot from `knowledge/`), and may be tight on RAM because MiniLM still loads. This is a known limitation, not a second architecture.
+
+Optional Docker Compose on a machine you already own still runs FastAPI + Ollama together. It is not required for the Netlify + Render path.
+
+This repository does **not** include a live backend URL until you create the Render service.
 
 ## CORS
 
@@ -506,7 +516,8 @@ docker compose config
 - OpenAlex usually contributes abstracts, not full papers.
 - `llama3.2:3b` is small; answers depend heavily on retrieved passages and grounding.
 - SQLite + Chroma are single-instance; this stack is not horizontally scaled.
-- First Ollama pull and first Docker image build are large and slow.
+- Render Free cannot run Ollama; production chat uses Groq (or OpenAI) via `LLM_PROVIDER`.
+- Render Free disks are ephemeral and the MiniLM embedder may strain 512 MB RAM.
 - Nominatim geocoding needs outbound HTTP and is rate-limited.
 - No live Netlify or backend URL is included in this repo.
 - Uploaded PDFs persist in Docker only because `PDF_DIR=/data/pdfs` is on the data volume; seed Markdown stays in the image.

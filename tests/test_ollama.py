@@ -13,10 +13,12 @@ from app.services.llm import (
     OllamaClient,
     OllamaProvider,
     OpenAIProvider,
+    GroqProvider,
     _coerce_confidence,
     _coerce_direction,
     _extract_json,
     clear_llm_client_override,
+    configured_llm_model,
     generate_answer,
     get_llm_client,
     llm_is_available,
@@ -75,6 +77,53 @@ def test_openai_optional_requires_key(monkeypatch, real_ollama_client):
     assert get_llm_client() is None
     with pytest.raises(LLMUnavailable):
         OpenAIProvider()
+
+
+def test_groq_optional_requires_key(monkeypatch, real_ollama_client):
+    monkeypatch.setattr(
+        "app.services.llm.get_settings",
+        lambda: type(
+            "S",
+            (),
+            {
+                "llm_provider": "groq",
+                "groq_model": "llama-3.1-8b-instant",
+                "groq_api_key": "",
+                "openai_api_key": "",
+                "openai_model": "gpt-4o-mini",
+                "ollama_base_url": "http://localhost:11434",
+                "ollama_model": "llama3.2:3b",
+            },
+        )(),
+    )
+    assert get_llm_client() is None
+    assert llm_is_configured() is False
+    with pytest.raises(LLMUnavailable):
+        GroqProvider()
+
+
+def test_groq_selected_when_key_present(monkeypatch, real_ollama_client):
+    monkeypatch.setattr(
+        "app.services.llm.get_settings",
+        lambda: type(
+            "S",
+            (),
+            {
+                "llm_provider": "groq",
+                "groq_model": "llama-3.1-8b-instant",
+                "groq_api_key": "test-groq-placeholder",
+                "openai_api_key": "",
+                "openai_model": "gpt-4o-mini",
+                "ollama_base_url": "http://localhost:11434",
+                "ollama_model": "llama3.2:3b",
+            },
+        )(),
+    )
+    client_obj = get_llm_client()
+    assert isinstance(client_obj, GroqProvider)
+    assert llm_is_configured() is True
+    assert llm_is_available() is True
+    assert configured_llm_model() == "llama-3.1-8b-instant"
 
 
 def test_extract_json_salvages_plain_text():

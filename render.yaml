@@ -1,0 +1,44 @@
+services:
+  - type: web
+    name: aaranya-api
+    runtime: python
+    plan: free
+    buildCommand: pip install -r backend/requirements.txt
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: PYTHONPATH
+        value: backend
+      - key: APP_ENV
+        value: production
+      - key: LLM_PROVIDER
+        value: groq
+      - key: GROQ_MODEL
+        value: llama-3.1-8b-instant
+      - key: GROQ_API_KEY
+        sync: false
+      - key: FRONTEND_ORIGIN
+        sync: false
+      - key: CORS_ORIGINS
+        sync: false
+      - key: CORS_ORIGIN_REGEX
+        value: https://.*\.netlify\.app
+      - key: ENABLE_OPENALEX
+        value: "true"
+      - key: DATA_DIR
+        value: ./data
+      - key: SQLITE_PATH
+        value: ./data/darukaa.sqlite
+      - key: CHROMA_PATH
+        value: ./data/chroma
+      - key: KNOWLEDGE_DIR
+        value: ./knowledge
+      - key: SOURCE_DIR
+        value: ./knowledge/sources
+      - key: PDF_DIR
+        value: ./knowledge/pdfs
+      - key: EMBEDDING_BACKEND
+        value: sentence-transformers
+      - key: EMBEDDING_MODEL
+        value: all-MiniLM-L6-v2
+      - key: ADMIN_API_TOKEN
+        sync: false

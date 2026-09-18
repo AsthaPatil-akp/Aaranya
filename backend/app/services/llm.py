@@ -223,15 +223,52 @@ class OllamaProvider:
 OllamaClient = OllamaProvider
 
 
-class OpenAIProvider:
+class OpenAICompatibleProvider:
+    """OpenAI Chat Completions API, including Groq's compatible endpoint."""
+
     provider = "openai"
 
-    def __init__(self) -> None:
-        settings = get_settings()
-        self.model = settings.openai_model
-        self.api_key = settings.openai_api_key
+    def __init__(
+        self,
+        *,
+        model: str,
+        api_key: str,
+        base_url: str,
+        label: str,
+        provider: str,
+    ) -> None:
+        self.model = model
+        self.api_key = api_key
+        self.base_url = base_url.rstrip("/")
+        self.label = label
+        self.provider = provider
         if not self.api_key:
-            raise LLMUnavailable("OpenAI is selected but OPENAI_API_KEY is not set.")
+            raise LLMUnavailable(f"{self.label} is selected but the API key is not set.")
+
+    def _headers(self) -> dict[str, str]:
+        return {"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"}
+
+    def _payload(
+        self,
+        system: str,
+        user: str,
+        *,
+        json_mode: bool,
+        temperature: float,
+        stream: bool,
+    ) -> dict[str, Any]:
+        payload: dict[str, Any] = {
+            "model": self.model,
+            "temperature": temperature,
+            "stream": stream,
+            "messages": [
+                {"role": "system", "content": system},
+                {"role": "user", "content": user},
+            ],
+        }
+        if json_mode:
+            payload["response_format"] = {"type": "json_object"}
+        return payload
 
     def complete(
         self,
@@ -242,28 +279,97 @@ class OpenAIProvider:
         temperature: float = 0.2,
         **_kwargs: Any,
     ) -> str:
-        payload: dict[str, Any] = {
-            "model": self.model,
-            "temperature": temperature,
-            "messages": [
-                {"role": "system", "content": system},
-                {"role": "user", "content": user},
-            ],
-        }
-        if json_mode:
-            payload["response_format"] = {"type": "json_object"}
         try:
             response = httpx.post(
-                "https://api.openai.com/v1/chat/completions",
-                headers={"Authorization": f"Bearer {self.api_key}"},
-                json=payload,
+                f"{self.base_url}/chat/completions",
+                headers=self._headers(),
+                json=self._payload(
+                    system,
+                    user,
+                    json_mode=json_mode,
+                    temperature=temperature,
+                    stream=False,
+                ),
                 timeout=90.0,
             )
         except httpx.HTTPError as exc:
-            raise LLMUnavailable("The optional OpenAI provider could not be reached.") from exc
+            raise LLMUnavailable(f"The {self.label} provider could not be reached.") from exc
         if response.status_code >= 400:
-            raise LLMUnavailable("The optional OpenAI provider rejected the request.")
+            raise LLMUnavailable(f"The {self.label} provider rejected the request.")
         return response.json()["choices"][0]["message"]["content"]
+
+    def stream(
+        self,
+        system: str,
+        user: str,
+        *,
+        json_mode: bool = False,
+        temperature: float = 0.3,
+        **_kwargs: Any,
+    ):
+        try:
+            with httpx.stream(
+                "POST",
+                f"{self.base_url}/chat/completions",
+                headers=self._headers(),
+                json=self._payload(
+                    system,
+                    user,
+                    json_mode=json_mode,
+                    temperature=temperature,
+                    stream=True,
+                ),
+                timeout=90.0,
+            ) as response:
+                if response.status_code >= 400:
+                    response.read()
+                    raise LLMUnavailable(f"The {self.label} provider rejected the request.")
+                for line in response.iter_lines():
+                    if not line:
+                        continue
+                    if line.startswith("data: "):
+                        line = line[6:]
+                    if line.strip() == "[DONE]":
+                        break
+                    try:
+                        data = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    delta = ((data.get("choices") or [{}])[0].get("delta") or {}).get("content") or ""
+                    if delta:
+                        yield str(delta)
+        except LLMUnavailable:
+            raise
+        except httpx.HTTPError as exc:
+            raise LLMUnavailable(f"The {self.label} provider could not be reached.") from exc
+
+
+class OpenAIProvider(OpenAICompatibleProvider):
+    provider = "openai"
+
+    def __init__(self) -> None:
+        settings = get_settings()
+        super().__init__(
+            model=settings.openai_model,
+            api_key=settings.openai_api_key,
+            base_url="https://api.openai.com/v1",
+            label="OpenAI",
+            provider="openai",
+        )
+
+
+class GroqProvider(OpenAICompatibleProvider):
+    provider = "groq"
+
+    def __init__(self) -> None:
+        settings = get_settings()
+        super().__init__(
+            model=settings.groq_model,
+            api_key=settings.groq_api_key,
+            base_url="https://api.groq.com/openai/v1",
+            label="Groq",
+            provider="groq",
+        )
 
 
 OpenAIClient = OpenAIProvider
@@ -386,6 +492,8 @@ def configured_llm_model() -> str:
     provider = settings.llm_provider.lower()
     if provider == "openai":
         return settings.openai_model
+    if provider == "groq":
+        return settings.groq_model
     return settings.ollama_model
 
 
@@ -398,6 +506,8 @@ def llm_is_configured() -> bool:
         return False
     if provider == "openai":
         return bool(settings.openai_api_key)
+    if provider == "groq":
+        return bool(settings.groq_api_key)
     if provider == "ollama":
         return bool(settings.ollama_base_url and settings.ollama_model)
     return False
@@ -457,6 +567,8 @@ def llm_is_available() -> bool:
     provider = settings.llm_provider.lower()
     if provider == "openai":
         return bool(settings.openai_api_key)
+    if provider == "groq":
+        return bool(settings.groq_api_key)
     if provider == "ollama":
         ok, _detail = probe_ollama()
         return ok
@@ -479,24 +591,34 @@ def get_llm_client() -> LLMClient | None:
         if not settings.openai_api_key:
             return None
         return OpenAIProvider()
+    if provider == "groq":
+        if not settings.groq_api_key:
+            return None
+        return GroqProvider()
     return None
+
+
+def _unconfigured_message() -> str:
+    settings = get_settings()
+    provider = settings.llm_provider.lower()
+    if provider == "openai":
+        return "OpenAI is selected but OPENAI_API_KEY is not set."
+    if provider == "groq":
+        return "Groq is selected but GROQ_API_KEY is not set."
+    return "The local AI model is not configured. Set LLM_PROVIDER=ollama and start Ollama."
 
 
 def generate_answer(system: str, user: str, **kwargs: Any) -> str:
     client = get_llm_client()
     if client is None:
-        raise LLMUnavailable(
-            "The local AI model is not configured. Set LLM_PROVIDER=ollama and start Ollama."
-        )
+        raise LLMUnavailable(_unconfigured_message())
     return client.complete(system, user, **kwargs)
 
 
 def stream_answer(system: str, user: str, **kwargs: Any):
     client = get_llm_client()
     if client is None:
-        raise LLMUnavailable(
-            "The local AI model is not configured. Set LLM_PROVIDER=ollama and start Ollama."
-        )
+        raise LLMUnavailable(_unconfigured_message())
     stream_fn = getattr(client, "stream", None)
     if stream_fn is None:
         yield client.complete(system, user, **kwargs)

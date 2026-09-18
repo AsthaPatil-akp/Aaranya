@@ -462,10 +462,16 @@ def prepare_chat(payload: ChatRequest) -> PreparedChat:
 def _require_llm(settings) -> None:
     if llm_is_configured() and llm_is_available():
         return
-    if settings.llm_provider.lower() == "openai":
+    provider = settings.llm_provider.lower()
+    if provider == "openai":
         detail = (
             "The optional OpenAI provider is not available. "
             "Set OPENAI_API_KEY, or switch to LLM_PROVIDER=ollama for the free local model."
+        )
+    elif provider == "groq":
+        detail = (
+            "The Groq provider is not available. "
+            "Set GROQ_API_KEY, or switch to LLM_PROVIDER=ollama for the free local model."
         )
     else:
         detail = (

@@ -17,7 +17,7 @@ flowchart TD
   ground --> ui
 ```
 
-Default LLM is local Ollama (`llama3.2:3b`). OpenAI/Groq/Anthropic remain optional via `LLM_PROVIDER` and the matching key. The rule engine may propose candidate interventions; the model authors the user-facing recommendation after grounding.
+Default LLM is **local Ollama** (`llama3.2:3b`). Production on Render uses the same RAG/grounding pipeline with `LLM_PROVIDER=groq` (OpenAI-compatible Chat Completions). OpenAI remains optional via `LLM_PROVIDER=openai`.
 
 Production split:
 
