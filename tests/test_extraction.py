@@ -85,3 +85,14 @@ def test_pesticide_none_is_not_mapped_to_pollution():
     assert ctx.human_impact.pesticide_use == "none"
     assert ctx.human_impact.pollution is None
 
+
+def test_extracts_jowar_farm_context():
+    found = extract_from_text(
+        "My jowar isn't growing well. My farm is 6 ha in Vasind, Maharashtra. "
+        "Soil pH is 5.0, rainfall is low, soil organic carbon is low."
+    )
+    assert found["crop"] == "jowar"
+    assert found["farm_size"].startswith("6")
+    assert found["soil_ph"] == 5.0
+    assert found["rainfall"] == "low"
+

@@ -54,6 +54,7 @@ from app.services.prompting import (
     ensure_material_variables,
     filter_evidence_for_answer,
     intervention_keys,
+    is_conceptual_question,
     predict_budget,
     streaming_system_prompt,
 )
@@ -237,7 +238,8 @@ def _apply_grounding(
         context=prepared.context,
         claims=claims,
     )
-    answer = ensure_material_variables(answer, prepared.context)
+    if not is_conceptual_question(prepared.message):
+        answer = ensure_material_variables(answer, prepared.context)
     answer, claims = ground_answer(
         answer,
         prepared.selected,
@@ -252,7 +254,7 @@ def _apply_grounding(
         prepared.kb_selected,
         prepared.ext_selected,
     )
-    answer = ensure_grounded_sources(answer, used_kb, used_ext)
+    answer = ensure_grounded_sources(answer, used_kb, used_ext, message=prepared.message)
     rec = recommendation_from_answer(
         answer,
         prepared.context,

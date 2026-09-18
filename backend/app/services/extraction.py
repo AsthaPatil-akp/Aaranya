@@ -32,6 +32,7 @@ CROP_TERMS = (
     "sugarcane",
     "barley",
     "millet",
+    "jowar",
     "sorghum",
     "pulses",
     "coffee",

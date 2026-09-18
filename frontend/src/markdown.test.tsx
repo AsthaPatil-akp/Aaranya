@@ -4,6 +4,7 @@ import { MarkdownMessage } from "./components/MarkdownMessage";
 import {
   extractAnswerSections,
   hideInternalEvidenceIds,
+  normalizeChatMarkdown,
   parseMarkdownTables,
   stripMarkdownTables,
 } from "./markdown";
@@ -81,5 +82,34 @@ describe("MarkdownMessage", () => {
     expect(screen.getByRole("cell", { name: "Agroforestry" })).toBeInTheDocument();
     expect(screen.queryByText(/\| Intervention \|/)).not.toBeInTheDocument();
     expect(screen.queryByText(/\|---/)).not.toBeInTheDocument();
+  });
+
+  it("splits run-on lists, stuck headings, and leftover internal ids", () => {
+    render(
+      <MarkdownMessage
+        text={
+          "## What is agroforestry? Agroforestry is trees with crops. - **Habitat:** birds - **Soil health:** litter See kb-99 leftover."
+        }
+      />,
+    );
+    expect(screen.getByRole("heading", { name: /what is agroforestry/i })).toBeInTheDocument();
+    expect(screen.getByText(/Agroforestry is trees with crops/)).toBeInTheDocument();
+    expect(screen.getByText("Habitat:").tagName).toBe("STRONG");
+    expect(screen.getByText("Soil health:").tagName).toBe("STRONG");
+    expect(screen.getAllByRole("listitem").length).toBeGreaterThanOrEqual(2);
+    expect(screen.queryByText(/kb-99/)).not.toBeInTheDocument();
+  });
+});
+
+describe("normalizeChatMarkdown", () => {
+  it("keeps one Recommendations heading and splits numbered items", () => {
+    const text = normalizeChatMarkdown(
+      "Start here. ## Recommendations 1. Cover crops. 2. Native trees. ## Recommendations",
+    );
+    expect(text.toLowerCase().split("## recommendations").length - 1).toBe(1);
+    expect(text).toContain("1. Cover crops.");
+    expect(text).toContain("2. Native trees.");
+    expect(text).not.toMatch(/1\. Cover crops\. 2\./);
+    expect(text).toMatch(/1\. Cover crops\.\s+2\. Native trees\./);
   });
 });

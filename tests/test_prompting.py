@@ -1,3 +1,5 @@
+import re
+
 from app.models.schemas import (
     ChatRequest,
     ClimateContext,
@@ -14,6 +16,7 @@ from app.services.llm import RecordingLLM
 from app.services.pipeline import handle_chat, recommendation_from_answer
 from app.services.prompting import (
     SYSTEM_PROMPT,
+    answer_length_band,
     build_user_prompt,
     compose_user_facing_answer,
     complete_recommendation,
@@ -21,6 +24,8 @@ from app.services.prompting import (
     ensure_grounded_sources,
     extract_metrics_from_text,
     filter_evidence_for_answer,
+    is_conceptual_question,
+    normalize_chat_markdown,
     parse_answer_sections,
     replace_internal_evidence_ids,
     sanitize_time_horizon,
@@ -441,4 +446,142 @@ def test_parse_answer_sections_moves_unheaded_table_out_of_assessment():
     assert "Keep residue" in sections["recommendations"]
     assert "|" not in sections["assessment_summary"]
     assert "Sources" not in sections["recommendations"]
+
+
+def _rich_jowar_context() -> EnvironmentalContext:
+    return EnvironmentalContext(
+        soil=SoilContext(organic_carbon=0.3, moisture="low", ph=5.0),
+        land=LandContext(land_use="monoculture", crop="jowar"),
+        climate=ClimateContext(rainfall="low"),
+    )
+
+
+def _assert_valid_chat_markdown(text: str) -> None:
+    assert text.strip()
+    assert not re.search(r"[^\n#][ \t]*#{1,6}[ \t]+\S", text)
+    assert not re.search(r"(?i)\b(?:kb|oa)[-:][A-Za-z0-9]+", text)
+    for heading in ("Recommendations", "Sources / Evidence", "Uncertainty", "Assessment Summary"):
+        assert text.lower().count(f"## {heading.lower()}") <= 1
+    assert not re.search(r"(?<=[.!?;:])[ \t]+\d{1,2}[.)][ \t]+\S", text)
+    assert not re.search(r"(?<=\S)[ \t]+[-*][ \t]+\*\*", text)
+
+
+def test_conceptual_question_detection_and_length_band():
+    context = _rich_jowar_context()
+    assert is_conceptual_question("What is agroforestry?")
+    assert is_conceptual_question("What's agroforestry?")
+    assert not is_conceptual_question("What should I do?")
+    assert not is_conceptual_question("Explain how low soil organic carbon, low rainfall and monoculture affect biodiversity.")
+    assert answer_length_band(context, "What is agroforestry?") == "conceptual"
+    assert answer_length_band(context, "What should I do?") == "complex"
+
+
+def test_conceptual_user_prompt_keeps_farm_context_without_action_plan_quota():
+    prompt = build_user_prompt(
+        message="What is agroforestry?",
+        context=_rich_jowar_context(),
+        history=[
+            {
+                "role": "user",
+                "content": "My jowar isn't growing well. My farm is 6 ha in Vasind, Maharashtra.",
+            }
+        ],
+        kb_evidence=[],
+        external_evidence=[],
+        candidates=[],
+    )
+    lowered = prompt.lower()
+    assert "what is agroforestry?" in lowered
+    assert "jowar" in lowered
+    assert "conceptual follow-up" in lowered
+    assert "250-450" not in prompt
+    assert "current question vs context" in lowered
+    assert "do not write assessment summary" in lowered
+
+
+def test_normalize_chat_markdown_splits_runons_and_hides_ids():
+    text = normalize_chat_markdown(
+        "## What is agroforestry? Agroforestry is trees with crops. "
+        "## Recommendations 1. Cover crops. 2. Native trees. ## Recommendations "
+        "- **Habitat:** birds - **Soil health:** litter See kb-99 leftover."
+    )
+    assert "## What is agroforestry?" in text
+    assert "Agroforestry is trees" in text
+    assert text.split("## What is agroforestry?")[1].lstrip().startswith("Agroforestry")
+    assert "\n- **Habitat:**" in text or text.count("\n- ") >= 1
+    assert "1. Cover crops." in text
+    assert "2. Native trees." in text
+    assert text.lower().count("## recommendations") == 1
+    assert "kb-99" not in text
+    _assert_valid_chat_markdown(text)
+
+
+def test_conceptual_compose_skips_action_plan_sections():
+    rec = RecommendationBlock(
+        action="Use drought-tolerant cover crops.",
+        why_it_works="Low carbon and low rainfall can interact.",
+        environmental_relationships="Several farm conditions may be interacting.",
+        impacted_metrics=[ImpactedMetric(name="Soil organic carbon", direction="up")],
+        time_horizon=TimeHorizon(narrative="Several seasons to multiple years", evidence_supported=True),
+        uncertainty="Local trials would still be needed.",
+    )
+    kb = EvidenceItem(
+        evidence_id="kb-14",
+        source="02.md",
+        document_name="02.md",
+        title="Cover Crops, Residue Retention and Water-Holding Capacity in Semi-Arid Farming",
+        passage="Cover crops and residue can support water holding.",
+        origin="knowledge_base",
+    )
+    text = compose_user_facing_answer(
+        data={
+            "answer": (
+                "## What is agroforestry?\n\n"
+                "Agroforestry is a farming system where trees or shrubs are grown together with crops or livestock.\n\n"
+                "For your jowar farm, agroforestry could involve native trees around the field (kb-14)."
+            )
+        },
+        rec=rec,
+        kb_evidence=[kb],
+        external_evidence=[],
+        message="What is agroforestry?",
+    )
+    lowered = text.lower()
+    assert "what is agroforestry" in lowered
+    assert "jowar" in lowered
+    assert "trees or shrubs" in lowered
+    assert "## assessment summary" not in lowered
+    assert "## recommendations" not in lowered
+    assert "## sources / evidence" not in lowered
+    assert "## uncertainty" not in lowered
+    assert "kb-14" not in text
+    _assert_valid_chat_markdown(text)
+
+
+def test_conceptual_ensure_grounded_sources_does_not_regenerate_action_plan():
+    kb = EvidenceItem(
+        evidence_id="kb-6",
+        source="03.md",
+        document_name="03.md",
+        title="Monoculture, Agroforestry and Habitat Complexity",
+        passage="Simplified cropping reduces habitat complexity.",
+        origin="knowledge_base",
+    )
+    messy = (
+        "## What is agroforestry? Agroforestry is trees grown with crops. "
+        "## Assessment Summary Several factors may be interacting. "
+        "## Recommendations 1. Cover crops. 2. Native trees. ## Recommendations "
+        "## Sources / Evidence - kb-6 ## Uncertainty Unknown. ## Uncertainty "
+        "- **Habitat:** birds - **Soil health:** litter"
+    )
+    cleaned = ensure_grounded_sources(messy, [kb], [], message="What is agroforestry?")
+    lowered = cleaned.lower()
+    assert "agroforestry is trees" in lowered
+    assert "## assessment summary" not in lowered
+    assert "## recommendations" not in lowered
+    assert "## sources / evidence" not in lowered
+    assert "## uncertainty" not in lowered
+    assert lowered.count("## recommendations") == 0
+    assert "kb-6" not in cleaned
+    _assert_valid_chat_markdown(cleaned)
 

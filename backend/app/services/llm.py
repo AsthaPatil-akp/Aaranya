@@ -29,6 +29,7 @@ from app.services.prompting import (
     dedupe_recommendations,
     ensure_grounded_sources,
     ensure_material_variables,
+    is_conceptual_question,
     filter_evidence_for_answer,
     mechanism_allowed,
     needs_answer_expansion,
@@ -846,9 +847,11 @@ def generate_recommendation(
             rec=block,
             kb_evidence=kb_evidence,
             external_evidence=external_evidence,
+            message=message,
         ),
         kb_evidence,
         external_evidence,
+        message=message,
     )
     rag_prompt = f"SYSTEM INSTRUCTIONS:\n{SYSTEM_PROMPT}\n\n{user}"
     provider = getattr(client, "provider", "")
@@ -870,16 +873,17 @@ def generate_recommendation(
             ).strip()
             if expanded:
                 if word_count(expanded) >= 180:
-                    composed = ensure_grounded_sources(expanded, kb_evidence, external_evidence)
+                    composed = ensure_grounded_sources(expanded, kb_evidence, external_evidence, message=message)
                     data["_expansion_raw"] = expanded[:8000]
                     rag_prompt = f"{rag_prompt}\n\n--- USER-FACING EXPANSION ---\n{expansion_user}"
         except LLMUnavailable:
             LOGGER.warning("Answer expansion skipped because the language model was unavailable.")
         except Exception:
             LOGGER.exception("Answer expansion failed; using composed JSON fields.")
-    composed = ensure_material_variables(composed, context)
+    if not is_conceptual_question(message):
+        composed = ensure_material_variables(composed, context)
     used_kb, used_ext = filter_evidence_for_answer(composed, claims, rec_ids, kb_evidence, external_evidence)
-    composed = ensure_grounded_sources(composed, used_kb, used_ext)
+    composed = ensure_grounded_sources(composed, used_kb, used_ext, message=message)
     block = complete_recommendation(
         block,
         composed,

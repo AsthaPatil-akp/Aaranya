@@ -83,6 +83,9 @@ The answer field must use these Markdown headings, each at most once, in this or
 ## Uncertainty
 If recommendations are tabular, use a GitHub-Flavored Markdown table. Never write internal ids such as kb-6 or oa-12 in the answer; name documents by title. Do not repeat a section.
 
+These seven headings are required only when the CURRENT user question asks for advice, recommendations, or a biodiversity action plan (for example "What should I do?").
+If the CURRENT question is conceptual or definitional (for example "What is agroforestry?"), ignore those seven headings. Answer that question directly in about 80-180 words. Use ENVIRONMENTAL VARIABLES and CONVERSATION CONTEXT only to briefly connect the concept to the user's crop or site. Do not regenerate Assessment Summary, Recommendations, Sources / Evidence, or other action-plan sections. Do not duplicate headings. One H2 for the topic is enough. Offer to write a farm-specific plan only if the user wants one.
+
 If no external scientific evidence was retrieved, do not pretend it was.
 
 Simple questions can be shorter.
@@ -143,7 +146,84 @@ Do not invent studies, DOIs, percentages, timeframes, missing environmental valu
 If no external scientific evidence is listed, do not pretend it was used.
 Name sources by document title, not internal ids such as kb-1.
 Never write internal evidence ids such as kb-6, kb-14, or oa-12 in the user-facing answer.
+
+These seven headings are required only when the CURRENT user question asks for advice or an action plan.
+If the CURRENT question is conceptual or definitional (for example "What is agroforestry?"), ignore those headings. Answer the current question directly. Use farm context only to connect the concept. Do not regenerate a full action plan.
 """
+
+CONCEPTUAL_FOLLOWUP_SYSTEM = """You are Darukaa.Earth's biodiversity intelligence assistant.
+
+Use the retrieved evidence as the factual basis of your response.
+Never invent evidence.
+Write for an intelligent non-specialist.
+
+Answer the CURRENT user question directly in about 80-180 words.
+Conversation history and environmental variables are context to remember, not a request to regenerate a Biodiversity Action Plan.
+
+Do not write these sections unless the user asked for an action plan:
+## Assessment Summary
+## What to investigate first
+## Recommendations
+## Why these work together
+## Next steps
+## Sources / Evidence
+## Uncertainty
+
+A good shape:
+- One H2 that names the concept.
+- A direct definition in ordinary language.
+- A short connection to the user's crop or site if those are known.
+- An optional H3 with a few distinct bullet points.
+- Offer to explain a farm-specific approach if the user wants one.
+
+Put each heading on its own line. Put each list item on its own line. Do not duplicate headings.
+Never write internal evidence ids such as kb-6, kb-14, or oa-12.
+Do not invent studies, DOIs, percentages, timeframes, or missing environmental values.
+"""
+
+
+_ACTION_PLAN_HINT = re.compile(
+    r"\b("
+    r"what should i do|what can i do|action plan|biodiversity action plan|"
+    r"recommend(?:ation)?s?|what (?:can|should) i (?:plant|change|try|grow)|"
+    r"how (?:do|can|should) i (?:fix|improve|restore|manage)|"
+    r"causing|isn't growing|is not growing|"
+    r"why is (?:my )?.{0,40}(?:declin|fail|dying)"
+    r")\b",
+    re.I,
+)
+_CONCEPTUAL_HINT = re.compile(
+    r"^\s*(?:"
+    r"what(?:['’]s|s)\s+(?!should\b|can\b|do\b|would\b)"
+    r"|what\s+(?:is|are)\s+"
+    r"|what does\s+.+\s+mean\b"
+    r"|define\s+"
+    r"|definition of\s+"
+    r"|meaning of\s+"
+    r"|explain(?:\s+what)?\s+(?:is|are)\s+"
+    r"|tell me about\s+(?!my\b)"
+    r")",
+    re.I,
+)
+
+
+def is_conceptual_question(message: str) -> bool:
+    text = (message or "").strip()
+    if not text:
+        return False
+    if not _CONCEPTUAL_HINT.search(text):
+        return False
+    if re.match(r"^\s*what(?:['’]s|s)\s+(?!should\b|can\b|do\b|would\b)", text, re.I):
+        return True
+    if re.match(r"^\s*what\s+(?:is|are)\s+", text, re.I):
+        return True
+    return not _ACTION_PLAN_HINT.search(text)
+
+
+def wants_action_plan(message: str) -> bool:
+    if is_conceptual_question(message):
+        return False
+    return bool(_ACTION_PLAN_HINT.search(message or ""))
 
 
 def _fmt_evidence(items: list[EvidenceItem]) -> str:
@@ -167,6 +247,8 @@ def _fmt_evidence(items: list[EvidenceItem]) -> str:
 def answer_length_band(context: EnvironmentalContext, message: str) -> str:
     known = context.known_variable_count()
     text = (message or "").lower()
+    if is_conceptual_question(message):
+        return "conceptual"
     if known >= 3 or (
         known >= 2 and re.search(r"\b(what should i do|causing|decline|biodiversity|recommend|interact)\b", text)
     ):
@@ -177,6 +259,14 @@ def answer_length_band(context: EnvironmentalContext, message: str) -> str:
 
 
 def length_instruction(band: str) -> str:
+    if band == "conceptual":
+        return (
+            "This is a conceptual follow-up, not a request for a biodiversity action plan. "
+            "Answer the CURRENT user question directly in about 80-180 words. "
+            "Use conversation history and known farm context only to connect the concept briefly. "
+            "Do not write Assessment Summary, What to investigate first, Recommendations, "
+            "Why these work together, Next steps, Sources / Evidence, or Uncertainty."
+        )
     if band == "simple":
         return "This is a simple question. Write about 80-150 words. Do not pad."
     if band == "normal":
@@ -189,6 +279,8 @@ def length_instruction(band: str) -> str:
 
 
 def predict_budget(band: str) -> int:
+    if band == "conceptual":
+        return 400
     if band == "simple":
         return 320
     if band == "normal":
@@ -280,6 +372,31 @@ def build_user_prompt(
     candidate_text = json.dumps(compact_candidates, ensure_ascii=True) if compact_candidates else "[]"
     band = answer_length_band(context, message)
     length_hint = length_instruction(band)
+    if band == "conceptual":
+        reasoning = (
+            "CURRENT QUESTION vs CONTEXT:\n"
+            "Answer the CURRENT user question directly. Conversation history and environmental variables are "
+            "context to remember, not a request to regenerate a full biodiversity action plan.\n"
+            "Keep farm memory. Briefly connect the concept to the user's crop or site when known.\n"
+            "Do not write Assessment Summary, What to investigate first, Recommendations, Why these work together, "
+            "Next steps, Sources / Evidence, or Uncertainty.\n"
+            "Use the retrieved passages only where they help explain the current concept. "
+            "Never write internal evidence ids such as kb-6 or oa-12.\n"
+            f"{length_hint}\n\n"
+        )
+    else:
+        reasoning = (
+            "REASONING REQUIREMENTS:\n"
+            "Work through this internally, then write only the final explanation in the answer field:\n"
+            "USER CONTEXT → ENVIRONMENTAL PROBLEM → INTERACTING FACTORS → EVIDENCE → RECOMMENDATIONS → METRICS → TIME HORIZON → UNCERTAINTY.\n"
+            "Use the retrieved passages as the factual basis. Reason across at least three known environmental variables when available. "
+            "Address every listed environmental variable. If scarce flowering plants are listed, include them with cautious wording. "
+            "Mention pesticide use only when pesticide_use is an actual use level, not when it is none. "
+            "Split combined practices into distinct recommendations and do not repeat the same one. "
+            "Connect each recommendation to this user's conditions and to specific retrieved evidence. "
+            "If only an abstract is present, say so. "
+            f"{length_hint}\n\n"
+        )
     return (
         "SYSTEM INSTRUCTIONS:\n"
         "You are answering using retrieved scientific evidence. Do not invent facts.\n\n"
@@ -296,16 +413,8 @@ def build_user_prompt(
         + _fmt_evidence(kb_evidence)
         + "\n\nEXTERNAL SCIENTIFIC EVIDENCE:\n"
         + _fmt_evidence(external_evidence)
-        + "\n\nREASONING REQUIREMENTS:\n"
-        "Work through this internally, then write only the final explanation in the answer field:\n"
-        "USER CONTEXT → ENVIRONMENTAL PROBLEM → INTERACTING FACTORS → EVIDENCE → RECOMMENDATIONS → METRICS → TIME HORIZON → UNCERTAINTY.\n"
-        "Use the retrieved passages as the factual basis. Reason across at least three known environmental variables when available. "
-        "Address every listed environmental variable. If scarce flowering plants are listed, include them with cautious wording. "
-        "Mention pesticide use only when pesticide_use is an actual use level, not when it is none. "
-        "Split combined practices into distinct recommendations and do not repeat the same one. "
-        "Connect each recommendation to this user's conditions and to specific retrieved evidence. "
-        "If only an abstract is present, say so. "
-        f"{length_hint}\n\n"
+        + "\n\n"
+        + reasoning
         + grounding_constraint_text(context, message)
         + "\n\nOPTIONAL CANDIDATE INTERVENTIONS (not facts; do not copy blindly; keep only those the evidence supports for these conditions):\n"
         + candidate_text
@@ -357,6 +466,8 @@ def build_expansion_prompt(
 
 
 def streaming_system_prompt(band: str) -> str:
+    if band == "conceptual":
+        return CONCEPTUAL_FOLLOWUP_SYSTEM
     if band == "simple":
         length = "Write about 80-150 words. Do not pad a simple question."
     elif band == "normal":
@@ -386,6 +497,23 @@ def build_stream_user_prompt(
         if isinstance(item, dict)
     ]
     band = answer_length_band(context, message)
+    if band == "conceptual":
+        closing = (
+            length_instruction(band)
+            + "\nAnswer the CURRENT user question directly. Keep using the conversation and environmental "
+            "variables as context. Briefly connect the concept to the user's crop or site when known. "
+            "Do not regenerate a full action plan. Do not invent studies, DOIs, percentages, timeframes, "
+            "or missing environmental values. Never write internal evidence ids such as kb-6 or oa-12.\n"
+        )
+    else:
+        closing = (
+            length_instruction(band)
+            + "\nUse the retrieved passages as the factual basis. Address every listed environmental variable. "
+            "If scarce flowering habitat is listed, include it with cautious wording. "
+            "Mention pesticide use only when it is an actual use level, not when pesticide_use is none. "
+            "Do not invent studies, DOIs, percentages, timeframes, missing environmental values, or crop rotation. "
+            "Recommendations must only use mechanisms supported by retrieved evidence.\n"
+        )
     return (
         "USER QUESTION:\n"
         f"{message}\n\n"
@@ -402,13 +530,8 @@ def build_stream_user_prompt(
         + "\n\nOPTIONAL CANDIDATE INTERVENTIONS (not facts; use only if retrieved evidence supports them):\n"
         + json.dumps(compact_candidates, ensure_ascii=True)
         + "\n\n"
-        + length_instruction(band)
-        + "\nUse the retrieved passages as the factual basis. Address every listed environmental variable. "
-        "If scarce flowering habitat is listed, include it with cautious wording. "
-        "Mention pesticide use only when it is an actual use level, not when pesticide_use is none. "
-        "Do not invent studies, DOIs, percentages, timeframes, missing environmental values, or crop rotation. "
-        "Recommendations must only use mechanisms supported by retrieved evidence.\n"
-        f"{grounding_constraint_text(context, message)}\n"
+        + closing
+        + f"{grounding_constraint_text(context, message)}\n"
         "Write the complete conversational answer now."
     )
 
@@ -712,7 +835,17 @@ def filter_evidence_for_answer(
     return kb_kept, ext_kept
 
 
-_INTERNAL_ID = re.compile(r"\[?\b(?:kb|oa)[-:]?\s*\d+\b\]?", re.I)
+_INTERNAL_ID = re.compile(r"\[?\b(?:kb|oa)[-:]?\s*[A-Za-z]*\d+[A-Za-z0-9]*\b\]?", re.I)
+_LEFTOVER_INTERNAL_ID = re.compile(r"\[?\b(?:kb|oa)[-:][A-Za-z0-9]+\b\]?", re.I)
+_ACTION_PLAN_TITLES = (
+    "Assessment Summary",
+    "What to investigate first",
+    "Recommendations",
+    "Why these work together",
+    "Next steps",
+    "Sources / Evidence",
+    "Uncertainty",
+)
 _SECTION_ORDER: tuple[tuple[str, str], ...] = (
     ("assessment_summary", "Assessment Summary"),
     ("investigate_first", "What to investigate first"),
@@ -783,6 +916,76 @@ def _heading_key(line: str) -> str | None:
     return None
 
 
+def split_inline_atx_headings(text: str) -> str:
+    value = (text or "").replace("\r\n", "\n")
+    value = re.sub(r"([^\s#])([ \t]+)(#{1,6})[ \t]+(?=[^\s#])", r"\1\n\n\3 ", value)
+    value = re.sub(r"([^\s#])(#{1,6}[ \t]+)(?=[^\s#])", r"\1\n\n\2", value)
+    for title in _ACTION_PLAN_TITLES:
+        value = re.sub(rf"(#{{1,6}}\s*{re.escape(title)})(?=\S)", r"\1\n\n", value, flags=re.I)
+        value = re.sub(rf"(#{{1,6}}\s*{re.escape(title)})[ \t]+(?=[A-Z0-9*\-])", r"\1\n\n", value, flags=re.I)
+        value = re.sub(rf"(?<!#)(\b{re.escape(title)})(?=[A-Z])", r"\1\n\n", value)
+    value = re.sub(
+        r"^(#{1,6}\s+(?:what(?:['’]s|s)?\s+(?:is|are)|what(?:['’]s|s))\b[^\n]{0,70}\?)[ \t]+(?=[A-Z])",
+        r"\1\n\n",
+        value,
+        flags=re.I | re.M,
+    )
+    return value
+
+
+def split_runon_lists(text: str) -> str:
+    lines: list[str] = []
+    for line in (text or "").split("\n"):
+        if _is_table_row(line) or _is_table_separator(line):
+            lines.append(line)
+            continue
+        split = re.sub(r"(?<=[.!?;:])\s+(?=\d{1,2}[.)]\s+\S)", "\n\n", line)
+        split = re.sub(r"(?<=\S)\s+(?=[-*]\s+\*\*)", "\n\n", split)
+        split = re.sub(r"(?<=\S)\s+(?=[-*]\s+[A-Z])", "\n\n", split)
+        lines.append(split)
+    return "\n".join(lines)
+
+
+def dedupe_action_plan_headings(text: str) -> str:
+    seen: set[str] = set()
+    out: list[str] = []
+    for line in (text or "").splitlines():
+        if _heading_key(line):
+            stripped = re.sub(r"^#{1,6}\s*", "", line.strip())
+            stripped = re.sub(r"\*+", "", stripped).strip().rstrip(":.").strip()
+            signature = stripped.lower()
+            if signature in seen:
+                continue
+            seen.add(signature)
+        out.append(line)
+    return "\n".join(out)
+
+
+def strip_leftover_internal_ids(text: str) -> str:
+    cleaned = _LEFTOVER_INTERNAL_ID.sub("", text or "")
+    cleaned = re.sub(r"[^\S\n]{2,}", " ", cleaned)
+    cleaned = re.sub(r"[ \t]*\([ \t]*\)", "", cleaned)
+    cleaned = re.sub(r"(?:,\s*){2,}", ", ", cleaned)
+    cleaned = re.sub(r"\s+([,;:.])", r"\1", cleaned)
+    return cleaned
+
+
+def normalize_chat_markdown(text: str) -> str:
+    value = split_inline_atx_headings(text or "")
+    value = split_runon_lists(value)
+    value = dedupe_action_plan_headings(value)
+    value = strip_leftover_internal_ids(value)
+    value = re.sub(r"[ \t]+\n", "\n", value)
+    value = re.sub(r"\n{3,}", "\n\n", value)
+    return value.strip()
+
+
+def finalize_conceptual_answer(text: str) -> str:
+    value = normalize_chat_markdown(text)
+    kept = [line for line in value.splitlines() if not _heading_key(line)]
+    return re.sub(r"\n{3,}", "\n\n", "\n".join(kept)).strip()
+
+
 def _is_table_row(line: str) -> bool:
     trimmed = line.strip()
     return trimmed.startswith("|") and "|" in trimmed[1:]
@@ -804,7 +1007,7 @@ def parse_answer_sections(text: str) -> dict[str, str]:
     sections = {key: "" for key, _title in _SECTION_ORDER}
     buckets: dict[str, list[str]] = {key: [] for key in sections}
     current = "assessment_summary"
-    lines = (text or "").replace("\r\n", "\n").split("\n")
+    lines = split_inline_atx_headings(text or "").replace("\r\n", "\n").split("\n")
     for line in lines:
         key = _heading_key(line)
         if key:
@@ -853,7 +1056,7 @@ def render_canonical_answer(sections: dict[str, str]) -> str:
             parts.append(body)
         else:
             parts.append(f"## {title}\n\n{body}")
-    return "\n\n".join(parts).strip()
+    return normalize_chat_markdown("\n\n".join(parts).strip())
 
 
 def _md_cell(value: str) -> str:
@@ -938,6 +1141,7 @@ def compose_user_facing_answer(
     rec: RecommendationBlock,
     kb_evidence: list[EvidenceItem],
     external_evidence: list[EvidenceItem],
+    message: str = "",
 ) -> str:
     """Build the chat answer from the model's own fields plus retrieved source metadata.
 
@@ -949,6 +1153,9 @@ def compose_user_facing_answer(
         str(data.get("answer") or data.get("_answer") or rec.action or "").strip(),
         evidence,
     )
+    answer = normalize_chat_markdown(answer)
+    if is_conceptual_question(message):
+        return finalize_conceptual_answer(answer)
     sections = parse_answer_sections(answer)
     combined = "\n\n".join(part for part in sections.values() if part)
 
@@ -982,16 +1189,22 @@ def ensure_grounded_sources(
     text: str,
     kb_evidence: list[EvidenceItem],
     external_evidence: list[EvidenceItem],
+    message: str = "",
 ) -> str:
     """Keep the model's explanation, but list only retrieved sources."""
     evidence = [*kb_evidence, *external_evidence]
     cleaned = replace_internal_evidence_ids(text or "", evidence)
+    cleaned = normalize_chat_markdown(cleaned)
+    if is_conceptual_question(message):
+        return finalize_conceptual_answer(cleaned)
     sections = parse_answer_sections(cleaned)
     sections["sources"] = format_sources_section(kb_evidence, external_evidence)
     return render_canonical_answer(sections)
 
 
 def is_complex_environmental_case(context: EnvironmentalContext, message: str) -> bool:
+    if is_conceptual_question(message):
+        return False
     if context.known_variable_count() >= 3:
         return True
     text = (message or "").lower()

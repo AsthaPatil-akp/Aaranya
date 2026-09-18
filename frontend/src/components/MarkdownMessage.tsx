@@ -2,7 +2,7 @@ import type { ReactNode } from "react";
 import type { Components } from "react-markdown";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { hideInternalEvidenceIds } from "../markdown";
+import { hideInternalEvidenceIds, normalizeChatMarkdown } from "../markdown";
 
 type MarkdownMessageProps = {
   text: string;
@@ -11,11 +11,7 @@ type MarkdownMessageProps = {
 };
 
 function normalizeMarkdown(text: string): string {
-  let value = (text || "").replace(/\r\n/g, "\n");
-  if (!value.includes("\n") && /\\n/.test(value)) {
-    value = value.replace(/\\n/g, "\n");
-  }
-  return value;
+  return normalizeChatMarkdown(text);
 }
 
 function omitNode<T extends { node?: unknown; children?: ReactNode }>(props: T) {

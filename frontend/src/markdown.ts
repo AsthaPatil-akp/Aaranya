@@ -13,7 +13,17 @@ export type AnswerSections = {
   uncertainty: string;
 };
 
-const INTERNAL_ID = /\[?\b(?:kb|oa)[-:]?\s*\d+\b\]?/gi;
+const INTERNAL_ID = /\[?\b(?:kb|oa)[-:]?\s*[A-Za-z]*\d+[A-Za-z0-9]*\b\]?/gi;
+const LEFTOVER_INTERNAL_ID = /\[?\b(?:kb|oa)[-:][A-Za-z0-9]+\b\]?/gi;
+const ACTION_PLAN_TITLES = [
+  "Assessment Summary",
+  "What to investigate first",
+  "Recommendations",
+  "Why these work together",
+  "Next steps",
+  "Sources / Evidence",
+  "Uncertainty",
+];
 
 const HEADING_ALIASES: Array<[keyof AnswerSections, RegExp]> = [
   ["assessment_summary", /^assessment summary$/i],
@@ -35,11 +45,59 @@ const HEADING_ALIASES: Array<[keyof AnswerSections, RegExp]> = [
 
 export function hideInternalEvidenceIds(text: string, titlesById: Record<string, string> = {}): string {
   if (!text) return "";
-  return text.replace(INTERNAL_ID, (raw) => {
+  const cleaned = text.replace(INTERNAL_ID, (raw) => {
     const key = raw.replace(/[[\]\s]/g, "").toLowerCase().replace(":", "-");
     const compact = key.replace(/-/g, "");
     return titlesById[key] || titlesById[compact] || "";
   });
+  return cleaned.replace(LEFTOVER_INTERNAL_ID, "");
+}
+
+export function normalizeChatMarkdown(text: string): string {
+  let value = String(text || "").replace(/\r\n/g, "\n");
+  if (!value.includes("\n") && /\\n/.test(value)) {
+    value = value.replace(/\\n/g, "\n");
+  }
+  value = value.replace(/([^\s#])([ \t]+)(#{1,6})[ \t]+(?=[^\s#])/g, "$1\n\n$3 ");
+  value = value.replace(/([^\s#])(#{1,6}[ \t]+)(?=[^\s#])/g, "$1\n\n$2");
+  for (const title of ACTION_PLAN_TITLES) {
+    const escaped = title.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    value = value.replace(new RegExp(`(#{1,6}\\s*${escaped})(?=\\S)`, "gi"), "$1\n\n");
+    value = value.replace(new RegExp(`(#{1,6}\\s*${escaped})[ \\t]+(?=[A-Z0-9*\\-])`, "gi"), "$1\n\n");
+    value = value.replace(new RegExp(`(?<!#)(\\b${escaped})(?=[A-Z])`, "g"), "$1\n\n");
+  }
+  value = value.replace(
+    /^(#{1,6}\s+(?:what(?:['’]s|s)?\s+(?:is|are)|what(?:['’]s|s))\b[^\n]{0,70}\?)[ \t]+(?=[A-Z])/gim,
+    "$1\n\n",
+  );
+  value = value
+    .split("\n")
+    .map((line) => {
+      if (isTableRow(line) || isSeparator(line)) return line;
+      return line
+        .replace(/(?<=[.!?;:])\s+(?=\d{1,2}[.)]\s+\S)/g, "\n\n")
+        .replace(/(?<=\S)\s+(?=[-*]\s+\*\*)/g, "\n\n")
+        .replace(/(?<=\S)\s+(?=[-*]\s+[A-Z])/g, "\n\n");
+    })
+    .join("\n");
+  const seen = new Set<string>();
+  value = value
+    .split("\n")
+    .filter((line) => {
+      if (!headingKey(line)) return true;
+      const stripped = line
+        .replace(/^#{1,6}\s*/, "")
+        .replace(/\*+/g, "")
+        .trim()
+        .replace(/[:.]+$/, "")
+        .trim()
+        .toLowerCase();
+      if (seen.has(stripped)) return false;
+      seen.add(stripped);
+      return true;
+    })
+    .join("\n");
+  return value.replace(/[ \t]+\n/g, "\n").replace(/\n{3,}/g, "\n\n").trim();
 }
 
 function isTableRow(line: string): boolean {
