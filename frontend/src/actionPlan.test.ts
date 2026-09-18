@@ -114,6 +114,9 @@ describe("action plan PDF data", () => {
     expect(plan.assessment).not.toMatch(/\|/);
     expect(plan.recommendations).toHaveLength(1);
     expect(plan.recommendations[0].why).toContain("residue");
+    expect(plan.whyTogether).toContain("Soil carbon and rainfall may interact");
+    expect(plan.nextSteps).toContain("Keep residue and add drought-tolerant cover crops");
+    expect(plan.nextSteps).toContain("Review progress against this horizon");
     expect(plan.monitoring).toEqual([
       { metric: "Soil organic carbon", frequency: "" },
     ]);
@@ -430,5 +433,49 @@ Local trials are still needed before promising a specific yield or species respo
     expect(text).not.toMatch(/\|\s*Intervention\s*\|/);
     expect(extractPdfCharSpaces(doc).every((value) => value === 0)).toBe(true);
     expect(extractPdfWordSpaces(doc).every((value) => value === 0)).toBe(true);
+  });
+
+  it("fills empty why-together and next-steps PDF sections from grounded recommendation fields", async () => {
+    const doc = await renderActionPlanPdf(
+      buildActionPlan(
+        {
+          ...baseResponse,
+          mode: "recommendation",
+          assistant_message:
+            "## Assessment Summary\nLow soil carbon and low rainfall can interact.\n\n## Recommendations\nKeep residue and add drought-tolerant cover crops.",
+          recommendation: {
+            action: "Keep residue and add drought-tolerant cover crops.",
+            why_it_works: "Retrieved passages link residue to soil function.",
+            environmental_relationships: "Soil carbon and rainfall may interact rather than acting alone.",
+            impacted_metrics: [{ name: "Soil organic carbon", direction: "unknown", note: "potentially affected" }],
+            time_horizon: {
+              narrative: "Several seasons to multiple years",
+              evidence_supported: true,
+            },
+            uncertainty: "Local trials are still needed.",
+            confidence: "medium",
+            confidence_rationale: "Retrieved passages were available.",
+            items: [
+              {
+                action: "Keep residue and add drought-tolerant cover crops.",
+                why: "Retrieved passages link residue to soil function.",
+                impacted_metrics: [{ name: "Soil organic carbon", direction: "unknown", note: "potentially affected" }],
+                time_horizon: "Several seasons to multiple years",
+                supporting_evidence: ["Cover Crops"],
+              },
+            ],
+          },
+        },
+        EMPTY_LAND_DETAILS,
+      ),
+    );
+    const text = extractPdfText(doc);
+    expect(text).toContain("5. Why these work together");
+    expect(text).toContain("Soil carbon and rainfall may interact rather than acting alone");
+    expect(text).not.toContain("No combined-explanation text was returned");
+    expect(text).toContain("6. Next steps");
+    expect(text).toContain("Keep residue and add drought-tolerant cover crops");
+    expect(text).toContain("Review progress against this horizon");
+    expect(text).not.toContain("No next steps were returned");
   });
 });

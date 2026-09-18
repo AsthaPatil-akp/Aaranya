@@ -229,6 +229,45 @@ export function planSections(response: ChatResponse) {
   return extractAnswerSections(pdfSourceText(response));
 }
 
+function uniqueNonempty(values: Array<string | null | undefined>): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const value of values) {
+    const text = hideInternalEvidenceIds(value || "").trim();
+    const key = text.toLowerCase().replace(/\s+/g, " ");
+    if (!text || seen.has(key)) continue;
+    seen.add(key);
+    out.push(text);
+  }
+  return out;
+}
+
+export function whyTogetherText(response: ChatResponse, recommendations: ActionPlanRecommendation[]): string {
+  const fromMarkdown = planSections(response).why_together.trim();
+  if (fromMarkdown) return fromMarkdown;
+  const rec = response.recommendation;
+  const fromFields = uniqueNonempty([
+    rec?.environmental_relationships,
+    rec?.why_it_works,
+    ...recommendations.map((item) => item.why),
+  ]);
+  if (!fromFields.length) return "";
+  if (fromFields.length === 1) return fromFields[0];
+  return fromFields.map((line) => `- ${line}`).join("\n");
+}
+
+export function nextStepsText(response: ChatResponse, recommendations: ActionPlanRecommendation[]): string {
+  const fromMarkdown = planSections(response).next_steps.trim();
+  if (fromMarkdown) return fromMarkdown;
+  if (!recommendations.length) return "";
+  const lines = recommendations.map((item, index) => `${index + 1}. ${item.action}`);
+  const horizon = (response.recommendation?.time_horizon?.narrative || "").trim();
+  if (horizon) {
+    lines.push(`${recommendations.length + 1}. Review progress against this horizon: ${horizon}.`);
+  }
+  return lines.join("\n");
+}
+
 export function recommendationTableForPlan(
   response: ChatResponse,
   items: ActionPlanRecommendation[],
@@ -320,8 +359,8 @@ export function buildActionPlan(response: ChatResponse, landDetails: LandDetails
     siteProfile: siteProfileRows(response, landDetails),
     assessment: sections.assessment_summary || groundedAssessment(response),
     investigateFirst: sections.investigate_first,
-    whyTogether: sections.why_together,
-    nextSteps: sections.next_steps,
+    whyTogether: whyTogetherText(response, recommendations),
+    nextSteps: nextStepsText(response, recommendations),
     recommendationTable: recommendationTableForPlan(response, recommendations),
     recommendations,
     monitoring: monitoringItems(response, recommendations),
