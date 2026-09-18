@@ -1,4 +1,6 @@
-# Darukaa.Earth — AI Biodiversity Intelligence
+# Aaranya — AI Biodiversity Intelligence
+
+Repository: https://github.com/AsthaPatil-akp/Aaranya
 
 An evidence-grounded conversational system that behaves like an **AI environmental scientist**. It retrieves scientific passages from a local knowledge base, optionally adds OpenAlex research, then asks a **free local LLM** (Ollama) to explain the evidence in plain language.
 
