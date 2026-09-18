@@ -12,9 +12,10 @@ USER
   → relevance filter
   → OpenAlex only if KB is weak/missing or the user asked for studies
   → rank/filter external abstracts or open-access text
-  → LLM prompt (INTERNAL vs EXTERNAL sections)
-  → claim-level grounding check
-  → natural answer + separate source lists
+  → LLM draft
+  → claim/evidence validation
+  → remove or rewrite unsupported claims
+  → grounded user-facing answer + separate source lists
 ```
 
 The language model is a **local Ollama model** by default (`llama3.2:3b`). It is the author of the recommendation. The rule engine may suggest candidate interventions; it is not the final answer. OpenAI remains an optional paid provider behind `LLM_PROVIDER=openai`.

@@ -48,6 +48,14 @@ export type ChatResponse = {
     uncertainty?: string | null;
     confidence: string;
     confidence_rationale: string;
+    items?: {
+      action: string;
+      why?: string;
+      impacted_metrics?: { name: string; direction: string; note?: string | null }[];
+      time_horizon?: string | null;
+      supporting_evidence?: string[];
+    }[];
+    supporting_evidence?: string[];
   } | null;
   evidence: EvidenceItem[];
   kb_evidence?: EvidenceItem[];

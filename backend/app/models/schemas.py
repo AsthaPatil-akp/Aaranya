@@ -63,6 +63,7 @@ class ClimateContext(BaseModel):
 
 class HumanImpactContext(BaseModel):
     pollution: Optional[str] = None
+    pesticide_use: Optional[str] = None
     deforestation: Optional[str] = None
     land_degradation: Optional[str] = None
     habitat_destruction: Optional[str] = None
@@ -110,6 +111,7 @@ class EnvironmentalContext(BaseModel):
             "water_availability": self.climate.water_availability,
             "climate_stress": self.climate.climate_stress,
             "pollution": self.human_impact.pollution,
+            "pesticide_use": self.human_impact.pesticide_use,
             "deforestation": self.human_impact.deforestation,
             "land_degradation": self.human_impact.land_degradation,
             "habitat_destruction": self.human_impact.habitat_destruction,
@@ -136,6 +138,7 @@ class StructuredInput(BaseModel):
     land_cover: Optional[str] = None
     fragmentation: Optional[str] = None
     pollution: Optional[str] = None
+    pesticide_use: Optional[str] = None
     drought: Optional[str] = None
     deforestation: Optional[str] = None
     species_richness: Optional[str] = None
@@ -153,6 +156,7 @@ class StructuredInput(BaseModel):
         "soil_moisture",
         "rainfall",
         "pollution",
+        "pesticide_use",
         "drought",
         "fragmentation",
         "water_availability",
@@ -228,6 +232,14 @@ class HeuristicProfile(BaseModel):
     )
 
 
+class RecommendationItem(BaseModel):
+    action: str
+    why: str = ""
+    impacted_metrics: list[ImpactedMetric] = Field(default_factory=list)
+    time_horizon: Optional[str] = None
+    supporting_evidence: list[str] = Field(default_factory=list)
+
+
 class RecommendationBlock(BaseModel):
     action: str
     why_it_works: str
@@ -237,6 +249,8 @@ class RecommendationBlock(BaseModel):
     uncertainty: Optional[str] = None
     confidence: ConfidenceLevel = "low"
     confidence_rationale: str = ""
+    items: list[RecommendationItem] = Field(default_factory=list)
+    supporting_evidence: list[str] = Field(default_factory=list)
 
 
 class SearchRequest(BaseModel):

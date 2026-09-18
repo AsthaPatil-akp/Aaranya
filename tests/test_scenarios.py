@@ -1,17 +1,49 @@
 from app.models.schemas import ChatRequest, StructuredInput
 from app.services.llm import RecordingLLM
-from app.services.pipeline import handle_chat
+from app.services.pipeline import handle_chat, handle_chat_stream
 from app.services.retrieval import retriever
+
+FARM_PROFILE_MESSAGE = (
+    "My farm is 5 acres in a semi-arid region. I grow wheat as a monoculture. "
+    "Soil pH is 8.1, organic carbon is 0.3%, soil moisture is low, rainfall is low and irregular, "
+    "and I've noticed fewer bees and butterflies. What should I do?"
+)
+
+
+def _assert_recommendation_panel(rec, evidence):
+    assert rec
+    assert rec.action.strip()
+    assert rec.why_it_works.strip()
+    assert rec.impacted_metrics
+    names = [metric.name.lower() for metric in rec.impacted_metrics]
+    assert any("carbon" in name or "pollinator" in name or "habitat" in name or "moisture" in name for name in names)
+    assert all(len(name) < 60 for name in names)
+    assert all("depending on establishment" not in name for name in names)
+    assert rec.time_horizon.narrative
+    assert rec.supporting_evidence
+    allowed = {(item.title or item.document_name) for item in evidence}
+    for title in rec.supporting_evidence:
+        assert title in allowed
+    items = rec.items
+    assert items
+    seen = set()
+    for item in items:
+        key = " ".join(item.action.lower().split())
+        assert key not in seen
+        seen.add(key)
+        assert item.why.strip()
+        assert item.impacted_metrics
+        assert item.time_horizon
+        assert item.supporting_evidence
+        for title in item.supporting_evidence:
+            assert title in allowed
+        assert all("potentially affected" in (metric.note or "").lower() or "possible" in (metric.note or "").lower() for metric in item.impacted_metrics)
 
 
 def test_farm_profile_retrieves_and_reasons(llm_recorder: RecordingLLM):
     result = handle_chat(
         ChatRequest(
-            message=(
-                "My farm is 5 acres in a semi-arid region. I grow wheat as a monoculture. "
-                "Soil pH is 8.1, organic carbon is 0.3%, soil moisture is low, rainfall is low and irregular, "
-                "and I've noticed fewer bees and butterflies. What should I do?"
-            ),
+            message=FARM_PROFILE_MESSAGE,
             debug=True,
         )
     )
@@ -31,6 +63,35 @@ def test_farm_profile_retrieves_and_reasons(llm_recorder: RecordingLLM):
         assert "0.3" in prompt
         rel = result.recommendation.environmental_relationships.lower()
         assert "carbon" in rel or "rainfall" in rel or "wheat" in rel
+        _assert_recommendation_panel(result.recommendation, result.evidence)
+
+
+def test_farm_profile_stream_fills_recommendation_panel(llm_recorder: RecordingLLM):
+    final = None
+    for event in handle_chat_stream(ChatRequest(message=FARM_PROFILE_MESSAGE, debug=True)):
+        if event.get("type") == "final":
+            final = event["response"]
+    assert final and final["mode"] in {"recommendation", "fallback"}
+    rec = final.get("recommendation")
+    assert rec
+    assert rec.get("why_it_works", "").strip()
+    metrics = rec.get("impacted_metrics") or []
+    assert metrics
+    names = [str(metric.get("name") or "").lower() for metric in metrics]
+    assert any("carbon" in name or "pollinator" in name or "habitat" in name or "moisture" in name for name in names)
+    assert all("depending on establishment" not in name for name in names)
+    horizon = rec.get("time_horizon") or {}
+    assert str(horizon.get("narrative") or "").strip()
+    assert rec.get("supporting_evidence")
+    items = rec.get("items") or []
+    assert items
+    actions = [" ".join(str(item.get("action") or "").lower().split()) for item in items]
+    assert len(actions) == len(set(actions))
+    for item in items:
+        assert str(item.get("why") or "").strip()
+        assert item.get("impacted_metrics")
+        assert str(item.get("time_horizon") or "").strip()
+        assert item.get("supporting_evidence")
 
 
 def test_pollution_urban_species_richness():

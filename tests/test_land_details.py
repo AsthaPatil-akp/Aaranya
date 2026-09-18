@@ -54,6 +54,7 @@ def test_empty_land_fields_are_not_invented():
         "rainfall",
         "temperature",
         "pollution",
+        "pesticide_use",
         "crop",
         "land_use",
         "biodiversity_observations",
@@ -110,6 +111,22 @@ def test_form_and_json_merge_prefers_structured_object():
     assert known["longitude"] == 73.8
 
 
+def test_pesticide_use_none_stays_separate_from_pollution():
+    result = handle_chat(
+        ChatRequest(
+            message="Bees are declining on my wheat farm.",
+            structured=StructuredInput(
+                crop="wheat",
+                land_use="intercropping",
+                pesticide_use="none",
+                soil_organic_carbon=0.3,
+            ),
+        )
+    )
+    assert result.known_variables.get("pesticide_use") == "none"
+    assert "pollution" not in result.known_variables
+
+
 def test_plain_chat_without_land_details_is_unchanged():
     result = handle_chat(ChatRequest(message="Biodiversity is declining on my farm."))
     assert result.mode == "clarification"
@@ -120,22 +137,51 @@ def test_plain_chat_without_land_details_is_unchanged():
 
 
 def test_geocode_returns_coordinates(monkeypatch):
-    class FakeResponse:
-        status_code = 200
-
-        def json(self):
-            return [{"display_name": "Pune, Maharashtra, India", "lat": "18.5204", "lon": "73.8567"}]
-
-    def fake_get(*_args, **_kwargs):
-        return FakeResponse()
-
-    monkeypatch.setattr("httpx.get", fake_get)
+    monkeypatch.setattr(
+        "app.api.routes.search_places",
+        lambda q, limit=5: [
+            {"label": "Pune, Maharashtra, India", "latitude": 18.5204, "longitude": 73.8567}
+        ],
+    )
     response = client.get("/api/geocode", params={"q": "Pune"})
     assert response.status_code == 200
     body = response.json()
     assert body[0]["label"].startswith("Pune")
     assert body[0]["latitude"] == 18.5204
     assert body[0]["longitude"] == 73.8567
+
+
+def test_geocode_falls_back_to_photon_when_nominatim_denies(monkeypatch):
+    class FakeResponse:
+        def __init__(self, status_code, payload):
+            self.status_code = status_code
+            self._payload = payload
+
+        def json(self):
+            return self._payload
+
+    def fake_get(url, **_kwargs):
+        if "nominatim" in url:
+            return FakeResponse(403, "Access denied")
+        return FakeResponse(
+            200,
+            {
+                "features": [
+                    {
+                        "properties": {"name": "Shahapur", "state": "Maharashtra", "country": "India"},
+                        "geometry": {"coordinates": [73.3266, 19.4518]},
+                    }
+                ]
+            },
+        )
+
+    monkeypatch.setattr("app.services.geocode.httpx.get", fake_get)
+    from app.services.geocode import search_places
+
+    rows = search_places("shahapur, maharashtra")
+    assert rows[0]["label"].startswith("Shahapur")
+    assert rows[0]["latitude"] == 19.4518
+    assert rows[0]["longitude"] == 73.3266
 
 
 def test_geocode_short_query_is_empty():

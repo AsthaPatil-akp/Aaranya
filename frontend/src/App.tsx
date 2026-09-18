@@ -1,4 +1,5 @@
-import { Navigate, Route, Routes, useLocation } from "react-router-dom";
+import { Navigate, Route, Routes, useLocation, useNavigate } from "react-router-dom";
+import { useEffect } from "react";
 import { Nav } from "./components/Nav";
 import { Footer } from "./components/Footer";
 import { Home } from "./pages/Home";
@@ -8,7 +9,17 @@ import { About } from "./pages/About";
 
 export default function App() {
   const { pathname } = useLocation();
+  const navigate = useNavigate();
   const labMode = pathname === "/lab";
+
+  useEffect(() => {
+    const opened = sessionStorage.getItem("aaranya-opened");
+    if (!opened) {
+      sessionStorage.setItem("aaranya-opened", "1");
+      if (pathname !== "/") navigate("/", { replace: true });
+    }
+  }, [pathname, navigate]);
+
   return (
     <div className={`app-shell${labMode ? " lab-mode" : ""}`}>
       <Nav />

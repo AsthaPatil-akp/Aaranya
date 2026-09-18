@@ -252,15 +252,21 @@ def describe_relationships(context: EnvironmentalContext) -> tuple[str, list[str
         )
     if context.human_impact.pollution:
         used.append("pollution")
-        if "pesticide" in str(context.human_impact.pollution).lower():
-            parts.append(
-                "Pesticide use was mentioned and can place additional pressure on insects and soil life; "
-                "this should be investigated rather than treated as a proven single cause."
-            )
-        else:
-            parts.append(
-                f"Pollution is {context.human_impact.pollution}, adding chemical stress that can reduce sensitive taxa and soil biological function."
-            )
+        parts.append(
+            f"Pollution is {context.human_impact.pollution}, adding chemical stress that can reduce sensitive taxa and soil biological function."
+        )
+    pesticide = str(getattr(context.human_impact, "pesticide_use", None) or "").lower()
+    if pesticide and pesticide not in {"none", "no", "not used", "zero", "absent"}:
+        used.append("pesticide_use")
+        parts.append(
+            "Pesticide use was mentioned and can place additional pressure on insects and soil life; "
+            "this should be investigated rather than treated as a proven single cause."
+        )
+    elif pesticide in {"none", "no", "not used", "zero", "absent"}:
+        used.append("pesticide_use")
+        parts.append(
+            "Current pesticide use is listed as none, so pesticide exposure should not be treated as an existing pressure."
+        )
     if context.human_impact.deforestation or context.land.fragmentation:
         used.append("habitat fragmentation")
         parts.append(
@@ -350,18 +356,32 @@ def select_intervention(context: EnvironmentalContext) -> dict[str, Any]:
         }
     if soc_low and rain_low and (mono or context.land.crop):
         crop = context.land.crop or "the current staple"
-        system = f"{crop} monoculture" if mono else f"{crop} system"
-        return {
-            "id": "covercrop_agroforestry",
-            "action": (
-                f"In this {system}, shift toward a diversified rotation with drought-tolerant cover crops, "
+        if context.land.land_use == "intercropping":
+            system = f"{crop} intercropping system"
+            action = (
+                f"In this {system}, keep the existing intercropping and add drought-tolerant cover crops "
+                "matched to the rainfall window, keeping residue on the soil, plus widely spaced native trees "
+                "or shrubs along contours where water allows."
+            )
+            why = (
+                "Low soil organic carbon and low rainfall interact: little residue means weak aggregation and poor infiltration. "
+                "The user already uses intercropping, so the evidence-aligned next step is cover and woody structure, not inventing crop rotation."
+            )
+        else:
+            system = f"{crop} monoculture" if mono else f"{crop} system"
+            action = (
+                f"In this {system}, add drought-tolerant cover crops matched to the rainfall window, "
                 "plus widely spaced native trees or shrubs along contours where water allows."
-            ),
-            "why": (
+            )
+            why = (
                 "Low soil organic carbon and low rainfall interact: little residue means weak aggregation and poor infiltration, "
                 "so scarce rain is lost and habitat stays simple. Cover crops add living roots and residue; "
                 "trees or shrubs add shade and structure if they are suited to the site."
-            ),
+            )
+        return {
+            "id": "covercrop_agroforestry",
+            "action": action,
+            "why": why,
             "keywords": ["cover crop", "agroforestry", "organic carbon", "rainfall", "monoculture", "intercrop"],
             "metrics": [
                 ImpactedMetric(name="Soil organic carbon", direction="up"),
@@ -374,7 +394,7 @@ def select_intervention(context: EnvironmentalContext) -> dict[str, Any]:
     if mono:
         return {
             "id": "intercropping_diversification",
-            "action": "Replace continuous monoculture with intercropping or a diversified rotation that includes legumes and flowering strips.",
+            "action": "Replace continuous monoculture with intercropping that includes legumes and flowering strips.",
             "why": "Monoculture reduces habitat heterogeneity and often soil biological function. Crop diversification increases rooting patterns, floral resources, and pest–predator habitat.",
             "keywords": ["intercropping", "crop diversification", "habitat", "pollinator"],
             "metrics": [
@@ -508,6 +528,7 @@ def candidate_payload(context: EnvironmentalContext) -> list[dict]:
             "idea": item["action"],
             "why_candidate": item["why"],
             "keywords": item["keywords"],
+            "metrics": item.get("metrics") or [],
         }
     ]
     if item["id"] == "covercrop_agroforestry":
@@ -517,12 +538,20 @@ def candidate_payload(context: EnvironmentalContext) -> list[dict]:
                 "idea": "Drought-tolerant cover crops matched to the rainfall window, keeping residue on the soil.",
                 "why_candidate": "Low organic carbon and low moisture are coupled; living roots and residue can support aggregation and some habitat if the species fit the dry season.",
                 "keywords": ["cover crop", "residue", "organic carbon", "soil moisture"],
+                "metrics": [
+                    ImpactedMetric(name="Soil organic carbon", direction="unknown", note="potentially affected"),
+                    ImpactedMetric(name="Soil moisture", direction="unknown", note="potentially affected"),
+                ],
             },
             {
                 "id": "native_trees_shrubs",
                 "idea": "Widely spaced native trees or shrubs where water allows, rather than a dense plantation.",
                 "why_candidate": "Woody structure can add shade and habitat in simplified wheat landscapes, but spacing matters in a semi-arid climate.",
                 "keywords": ["agroforestry", "native shrubs", "habitat"],
+                "metrics": [
+                    ImpactedMetric(name="Habitat diversity", direction="unknown", note="potentially affected"),
+                    ImpactedMetric(name="Pollinator diversity", direction="unknown", note="potentially affected"),
+                ],
             },
         ]
     if _is_low(context.biodiversity.plant_diversity) or _is_low(context.biodiversity.habitat_diversity):
@@ -532,15 +561,23 @@ def candidate_payload(context: EnvironmentalContext) -> list[dict]:
                 "idea": "Keep or restore flowering field margins or native floral strips that are not sprayed.",
                 "why_candidate": "Few flowering plants mean a short or empty floral calendar for bees and butterflies; margins can add resources without converting the whole field.",
                 "keywords": ["flowering", "pollinator", "field margin"],
+                "metrics": [
+                    ImpactedMetric(name="Pollinator diversity", direction="unknown", note="potentially affected"),
+                    ImpactedMetric(name="Plant diversity", direction="unknown", note="potentially affected"),
+                ],
             }
         )
-    if context.human_impact.pollution and "pesticide" in str(context.human_impact.pollution).lower():
+    pesticide = str(getattr(context.human_impact, "pesticide_use", None) or "").lower()
+    if pesticide and pesticide not in {"none", "no", "not used", "zero", "absent"}:
         ideas.append(
             {
                 "id": "pesticide_review",
                 "idea": "Review pesticide timing, drift and unsprayed refuges during the growing season.",
                 "why_candidate": "Agrochemical use can place additional pressure on insects. Investigate it as a contributing stress, not as a proven sole cause unless evidence says so.",
                 "keywords": ["pesticide", "agrochemical", "pollinator"],
+                "metrics": [
+                    ImpactedMetric(name="Pollinator diversity", direction="unknown", note="potentially affected"),
+                ],
             }
         )
     return ideas

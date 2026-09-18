@@ -1,3 +1,4 @@
+import { APP_NAME } from "../brand";
 import { NavLink, useLocation, useNavigate } from "react-router-dom";
 
 export function Nav() {
@@ -7,7 +8,7 @@ export function Nav() {
     <header className="nav">
       <NavLink to="/" className="brand">
         <span className="logo-mark">🌿</span>
-        Darukaa.Earth
+        {APP_NAME}
       </NavLink>
       <nav className="nav-links">
         <NavLink to="/" className={({ isActive }) => (isActive && pathname === "/" ? "active" : "")}>

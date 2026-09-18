@@ -4,7 +4,14 @@ import json
 import re
 from typing import Any
 
-from app.models.schemas import EnvironmentalContext, EvidenceItem, RecommendationBlock, TimeHorizon
+from app.models.schemas import (
+    EnvironmentalContext,
+    EvidenceItem,
+    ImpactedMetric,
+    RecommendationBlock,
+    RecommendationItem,
+    TimeHorizon,
+)
 
 SYSTEM_PROMPT = """You are Darukaa.Earth's biodiversity intelligence assistant.
 
@@ -41,11 +48,16 @@ Rules:
 - If evidence_level=full_text, you may use that open-access text, still without inventing page numbers.
 - Do not mention monoculture unless land_use=monoculture is in the environmental variables.
 - Do not invent missing environmental values. If a land-detail field is listed as not provided, leave it unknown and ask for it when it is needed.
+- Never invent crop rotation when the user only provided wheat and intercropping, or when rotation is not in the user message or retrieved passages.
+- Do not claim that high soil moisture causes biodiversity decline through plant crowding unless a retrieved passage explicitly supports that mechanism.
+- If pesticide_use is none, do not discuss pesticide exposure as an existing factor. If historical pesticide use could matter, ask about it explicitly.
+- Do not map pesticide_use to pollution. Keep those environmental variables separate.
 - Do not claim that one factor alone caused a biodiversity decline when several conditions are known. Use cautious wording such as "may contribute", "could be interacting with", "can place additional pressure", and "should be investigated" when causality is not established.
-- Address every materially relevant environmental variable the user provided. If pesticide use or scarce flowering habitat is listed, mention it. Do not silently ignore it. Do not claim pesticides caused the decline unless a retrieved passage supports that causal claim.
+- Address every materially relevant environmental variable the user provided. If pesticide use is listed as an actual use level (not none) or scarce flowering habitat is listed, mention it. Do not silently ignore it. Do not claim pesticides caused the decline unless a retrieved passage supports that causal claim.
 - When three or more environmental variables are known, explain how they interact (for example soil condition → vegetation → insects → pollinators).
 - Select only the interventions that fit this user's conditions and the retrieved passages. Split combined ideas into distinct recommendations (for example cover crops as one recommendation, widely spaced native trees or shrubs as another). Do not repeat the same intervention.
-- For every major recommendation, name the environmental metrics it could affect. If the evidence is uncertain, write "potentially affected" rather than a guaranteed increase or decrease. Do not invent numerical improvement percentages.
+- Recommendations must only use mechanisms supported by retrieved evidence. If a claim cannot be supported, rewrite it as an uncertainty or a question, or omit it. Never leave an unsupported claim in the user-facing answer.
+- For every major recommendation, include: what to do, why, impacted metrics, time horizon only if evidence supports one, and which retrieved evidence supports it. If the evidence is uncertain, write "potentially affected" rather than a guaranteed increase or decrease. Do not invent numerical improvement percentages, exact timeframes, or unsupported causal relationships.
 - Time horizons only when evidence supports them. If the evidence only supports a multi-year or multi-season response, say "several seasons to multiple years". If no timeframe is supported, say so. Do not invent exact spans such as 10-20 years.
 - Prefer hedges: "research suggests", "evidence indicates", "based on the studies I found", "there is limited evidence for".
 - Candidate interventions are optional ideas, not facts. Use a candidate only if retrieved evidence supports it for these conditions.
@@ -99,12 +111,13 @@ Write the user-facing answer only. No JSON. No hidden chain-of-thought. Do not w
 
 Write about 250-450 words as a conversation:
 1. Start with the conditions the user described and how several factors may be interacting.
-2. Mention every materially relevant variable, including pesticide use and scarce flowering habitat when they were provided. Use "may contribute", "can place additional pressure", or "should be investigated" unless retrieved evidence supports a stronger causal claim.
+2. Mention every materially relevant variable, including scarce flowering habitat when it was provided. Mention pesticide use only when it is an actual use level, not when pesticide_use is none. Use "may contribute", "can place additional pressure", or "should be investigated" unless retrieved evidence supports a stronger causal claim.
 3. Say what you would investigate first.
-4. Give distinct recommendations. Split cover crops from agroforestry or native trees. Do not repeat the same intervention. For each: what to do, why it may help, metrics it could affect, time horizon only if evidence supports one, and which retrieved source supports it.
+4. Give distinct recommendations. Split cover crops from agroforestry or native trees. Do not repeat the same intervention. For each: what to do, why it may help, metrics it could affect, time horizon only if evidence supports one, and which retrieved source supports it. Use only mechanisms supported by retrieved evidence. Never invent crop rotation unless the user or the retrieved passages mention it.
 5. For metrics, prefer "potentially affected" over guaranteed increases.
 6. For time, prefer "several seasons to multiple years" or "no specific timeframe is supported by the retrieved evidence". Never invent 10-20 years or similar exact spans.
-7. Close with a concise Sources / Evidence section listing only documents you actually used, then uncertainty.
+7. If a statement is not supported by retrieved passages, rewrite it as uncertainty or a question, or omit it. Do not leave unsupported claims in the answer.
+8. Close with a concise Sources / Evidence section listing only documents you actually used, then uncertainty.
 
 Do not invent studies, DOIs, percentages, timeframes, missing environmental values, or scientific findings.
 If no external scientific evidence is listed, do not pretend it was used.
@@ -175,6 +188,7 @@ LAND_DETAIL_KEYS = (
     "rainfall",
     "temperature",
     "pollution",
+    "pesticide_use",
     "biodiversity_observations",
 )
 
@@ -182,6 +196,44 @@ LAND_DETAIL_KEYS = (
 def unprovided_land_fields(context: EnvironmentalContext) -> list[str]:
     known = context.known_variables()
     return [key for key in LAND_DETAIL_KEYS if key not in known]
+
+
+def pesticide_use_is_none(context: EnvironmentalContext) -> bool:
+    value = str(getattr(context.human_impact, "pesticide_use", None) or "").strip().lower()
+    return value in {"none", "no", "not used", "zero", "absent"}
+
+
+def grounding_constraint_text(context: EnvironmentalContext, message: str) -> str:
+    lines = [
+        "Never invent crop rotation unless the user or retrieved passages mention it.",
+        "Do not claim high soil moisture causes biodiversity decline through plant crowding unless a retrieved passage says so.",
+        "Do not invent exact timeframes, percentages, or causal relationships.",
+        "If a claim cannot be supported, rewrite it as uncertainty or a question, or omit it. Do not show unsupported claims.",
+        "Keep pesticide_use and pollution as separate variables.",
+    ]
+    land_use = (context.land.land_use or "").lower()
+    crop = (context.land.crop or "").lower()
+    if crop == "wheat" and land_use == "intercropping":
+        lines.append("The user provided wheat and intercropping only. Do not invent crop rotation.")
+    elif land_use == "intercropping":
+        lines.append("Land use is already intercropping. Do not invent crop rotation as a substitute.")
+    if pesticide_use_is_none(context):
+        lines.append(
+            "pesticide_use is none. Do not discuss pesticide exposure as an existing factor. "
+            "If historical pesticide use is relevant, ask about it explicitly. Do not map this to pollution=none."
+        )
+    elif context.human_impact.pesticide_use:
+        lines.append(
+            f"pesticide_use is {context.human_impact.pesticide_use}. Mention it cautiously. "
+            "Do not treat it as pollution unless pollution was also provided."
+        )
+    if (context.soil.moisture or "").lower() in {"high", "very high", "saturated"}:
+        lines.append(
+            "Soil moisture is high. Do not infer biodiversity decline from plant crowding unless retrieved evidence supports that mechanism."
+        )
+    if re.search(r"wheat|intercrop", message or "", re.I) and not re.search(r"rotation", message or "", re.I):
+        lines.append("The user message does not mention crop rotation. Do not add it.")
+    return "GROUNDING CONSTRAINTS:\n- " + "\n- ".join(lines)
 
 
 def build_user_prompt(
@@ -227,12 +279,14 @@ def build_user_prompt(
         "Work through this internally, then write only the final explanation in the answer field:\n"
         "USER CONTEXT → ENVIRONMENTAL PROBLEM → INTERACTING FACTORS → EVIDENCE → RECOMMENDATIONS → METRICS → TIME HORIZON → UNCERTAINTY.\n"
         "Use the retrieved passages as the factual basis. Reason across at least three known environmental variables when available. "
-        "Address every listed environmental variable. If pesticide use or scarce flowering plants are listed, include them with cautious wording. "
+        "Address every listed environmental variable. If scarce flowering plants are listed, include them with cautious wording. "
+        "Mention pesticide use only when pesticide_use is an actual use level, not when it is none. "
         "Split combined practices into distinct recommendations and do not repeat the same one. "
         "Connect each recommendation to this user's conditions and to specific retrieved evidence. "
         "If only an abstract is present, say so. "
         f"{length_hint}\n\n"
-        "OPTIONAL CANDIDATE INTERVENTIONS (not facts; do not copy blindly; keep only those the evidence supports for these conditions):\n"
+        + grounding_constraint_text(context, message)
+        + "\n\nOPTIONAL CANDIDATE INTERVENTIONS (not facts; do not copy blindly; keep only those the evidence supports for these conditions):\n"
         + candidate_text
         + "\n\nOUTPUT FORMAT:\nWrite JSON now. Put the complete user-facing explanation in the answer field last."
     )
@@ -266,9 +320,11 @@ def build_expansion_prompt(
         f"{json.dumps(unprovided_land_fields(context), ensure_ascii=True)}\n\n"
         "ENVIRONMENTAL PROBLEM / INTERACTING FACTORS / EVIDENCE / RECOMMENDATIONS / METRICS / TIME HORIZON / UNCERTAINTY\n"
         "Use the structured findings only as notes. The retrieved passages are the factual basis.\n"
-        "Mention every listed environmental variable. Do not omit pesticide use or scarce flowering habitat if they appear above.\n"
+        "Mention every listed environmental variable. Do not omit scarce flowering habitat if it appears above. "
+        "Mention pesticide use only when pesticide_use is an actual use level, not when it is none.\n"
         "Write naturally: based on the conditions you described... then what I would investigate first... then distinct recommendations.\n"
         f"{length_instruction(answer_length_band(context, message))}\n\n"
+        f"{grounding_constraint_text(context, message)}\n\n"
         "STRUCTURED FINDINGS:\n"
         f"{json.dumps(compact, ensure_ascii=True)}\n\n"
         "INTERNAL KNOWLEDGE BASE:\n"
@@ -327,8 +383,11 @@ def build_stream_user_prompt(
         + "\n\n"
         + length_instruction(band)
         + "\nUse the retrieved passages as the factual basis. Address every listed environmental variable. "
-        "If pesticide use or scarce flowering habitat is listed, include it with cautious wording. "
-        "Do not invent studies, DOIs, percentages, timeframes, or missing environmental values.\n"
+        "If scarce flowering habitat is listed, include it with cautious wording. "
+        "Mention pesticide use only when it is an actual use level, not when pesticide_use is none. "
+        "Do not invent studies, DOIs, percentages, timeframes, missing environmental values, or crop rotation. "
+        "Recommendations must only use mechanisms supported by retrieved evidence.\n"
+        f"{grounding_constraint_text(context, message)}\n"
         "Write the complete conversational answer now."
     )
 
@@ -527,17 +586,29 @@ def ensure_material_variables(answer: str, context: EnvironmentalContext) -> str
     text = answer or ""
     lowered = text.lower()
     extras: list[str] = []
+    pesticide = str(getattr(context.human_impact, "pesticide_use", None) or "").lower()
     pollution = str(context.human_impact.pollution or "").lower()
-    if pollution and not re.search(r"pesticide|insecticide|herbicide|agrochemical|chemical pressure|pollution", lowered):
-        if "pesticide" in pollution:
+    if pesticide_use_is_none(context):
+        if (
+            (context.biodiversity.pollinator_diversity or "").lower() in {"declining", "low"}
+            or "pollinator" in lowered
+            or "bees" in lowered
+        ) and "historical pesticide" not in lowered:
             extras.append(
-                "Pesticide use during the growing season can place additional pressure on insects and should be investigated. "
-                "That does not, by itself, prove pesticides caused the decline."
+                "Current pesticide use is listed as none, so pesticide exposure should not be treated as an existing "
+                "pressure. If insecticides were used in earlier seasons, that history would help — was there historical pesticide use?"
             )
-        else:
-            extras.append(
-                f"Chemical pressure ({context.human_impact.pollution}) can place additional stress on sensitive species and should be investigated alongside the other site conditions."
-            )
+    elif pesticide and not re.search(r"pesticide|insecticide|herbicide|agrochemical", lowered):
+        extras.append(
+            "Pesticide use during the growing season can place additional pressure on insects and should be investigated. "
+            "That does not, by itself, prove pesticides caused the decline."
+        )
+    elif pollution and pollution not in {"none"} and "pesticide" not in pollution and not re.search(
+        r"pollution|chemical pressure", lowered
+    ):
+        extras.append(
+            f"Chemical pressure ({context.human_impact.pollution}) can place additional stress on sensitive species and should be investigated alongside the other site conditions."
+        )
     if (
         (context.biodiversity.plant_diversity or "").lower() in {"low", "very low"}
         or (context.biodiversity.habitat_diversity or "").lower() in {"low", "very low"}
@@ -733,3 +804,386 @@ def is_complex_environmental_case(context: EnvironmentalContext, message: str) -
 
 def needs_answer_expansion(answer: str, context: EnvironmentalContext, message: str) -> bool:
     return False
+
+
+KNOWN_METRICS = (
+    ("soil organic carbon", "Soil organic carbon"),
+    ("organic carbon", "Soil organic carbon"),
+    ("soil carbon", "Soil organic carbon"),
+    ("\bsoc\b", "Soil organic carbon"),
+    ("soil moisture", "Soil moisture"),
+    ("water holding", "Soil moisture"),
+    ("pollinator diversity", "Pollinator diversity"),
+    ("pollinators", "Pollinator diversity"),
+    ("bees and butterflies", "Pollinator diversity"),
+    ("habitat diversity", "Habitat diversity"),
+    ("floral resources", "Plant diversity"),
+    ("flowering", "Plant diversity"),
+    ("plant diversity", "Plant diversity"),
+    ("species richness", "Species richness"),
+    ("microbial diversity", "Microbial diversity"),
+    ("species survival", "Species survival"),
+)
+
+_WHY_HINT = re.compile(
+    r"\b(because|this may|may help|can (?:help|support|add|rebuild)|interact|"
+    r"retrieved|evidence (?:indicates|suggests|links)|consistent with|so that|"
+    r"without adding|living roots|residue)\b",
+    re.I,
+)
+_HORIZON_HINT = re.compile(
+    r"(several seasons to multiple years|no specific timeframe is supported|"
+    r"multiple years|multi-year|several seasons|within a (?:growing )?season|"
+    r"gradual(?:ly)? over .+?(?:[.!]|$))",
+    re.I,
+)
+_ITEM_LINE = re.compile(
+    r"(?:^|\n)\s*(?:\d+[.)]|[-*])\s+(.+?)(?=(?:\n\s*(?:\d+[.)]|[-*])\s+)|\n{2,}|$)",
+    re.S,
+)
+_EVIDENCE_ID_LINE = re.compile(r"^(?:kb|oa)[-:]?\s*[a-z0-9]+", re.I)
+
+
+def _looks_like_source_line(chunk: str, sources: list[str]) -> bool:
+    text = re.sub(r"\s+", " ", (chunk or "")).strip()
+    if not text:
+        return True
+    if _EVIDENCE_ID_LINE.match(text) or text.lower().startswith(("internal knowledge", "external scientific")):
+        return True
+    lowered = text.lower()
+    for title in sources:
+        key = (title or "").strip().lower()
+        if not key:
+            continue
+        if lowered == key or lowered.startswith(key[:48]):
+            return True
+        if len(key) > 24 and key in lowered and not intervention_keys(text):
+            return True
+    return False
+
+
+def evidence_titles(evidence: list[EvidenceItem], limit: int = 6) -> list[str]:
+    titles: list[str] = []
+    seen: set[str] = set()
+    for item in evidence:
+        title = (item.title or item.document_name or "").strip()
+        if not title or title.lower() in seen:
+            continue
+        seen.add(title.lower())
+        titles.append(title)
+        if len(titles) >= limit:
+            break
+    return titles
+
+
+def _answer_body(answer: str) -> str:
+    return re.split(
+        r"(?is)(?:^|\n|[.!?]\s+)sources?\s*/?\s*evidence\b",
+        answer or "",
+        maxsplit=1,
+    )[0].strip()
+
+
+def _canonical_metric_name(text: str) -> str | None:
+    blob = (text or "").strip()
+    if not blob or len(blob) > 48:
+        return None
+    for needle, name in KNOWN_METRICS:
+        if re.search(needle, blob, re.I):
+            return name
+    return None
+
+
+def extract_metrics_from_text(
+    answer: str,
+    existing: list[ImpactedMetric] | None = None,
+    evidence: list[EvidenceItem] | None = None,
+) -> list[ImpactedMetric]:
+    del evidence  # metrics are taken from the answer text, not by inventing from unused passages
+    found = list(existing or [])
+    body = _answer_body(answer)
+    lowered = body.lower()
+    for needle, name in KNOWN_METRICS:
+        if not re.search(needle, lowered, re.I):
+            continue
+        if all(metric.name.lower() != name.lower() for metric in found):
+            found.append(ImpactedMetric(name=name, direction="unknown", note="potentially affected"))
+    listed = re.search(r"(?:impacted metrics|metrics these changes could affect)\s*:\s*(.+?)(?:\n|$)", body, re.I)
+    if listed:
+        for part in listed.group(1).split(";"):
+            raw_name = re.sub(r"^(?:potentially affected:?\s*)", "", part.strip(" ."), flags=re.I)
+            raw_name = raw_name.split(":")[0].strip()
+            name = _canonical_metric_name(raw_name)
+            if name and all(metric.name.lower() != name.lower() for metric in found):
+                found.append(ImpactedMetric(name=name, direction="unknown", note="potentially affected"))
+    return found
+
+
+def extract_why_from_answer(answer: str) -> str:
+    body = _answer_body(answer)
+    sentences = [part.strip() for part in re.split(r"(?<=[.!?])\s+", body) if len(part.strip()) >= 40]
+    picked: list[str] = []
+    skip = re.compile(
+        r"^(based on the conditions|what i would investigate|sources?|impacted metrics|metrics these)",
+        re.I,
+    )
+    for sentence in sentences:
+        if skip.search(sentence):
+            continue
+        if _WHY_HINT.search(sentence):
+            picked.append(sentence.rstrip("."))
+        if len(picked) >= 2:
+            break
+    if picked:
+        return ". ".join(picked).strip()
+    for sentence in sentences[1:3]:
+        if skip.search(sentence):
+            continue
+        return sentence.rstrip(".")
+    return ""
+
+
+def extract_horizon_from_answer(answer: str) -> str | None:
+    match = _HORIZON_HINT.search(answer or "")
+    if not match:
+        return None
+    text = match.group(0).strip(" .")
+    if len(text) > 180:
+        return text[:180].rsplit(" ", 1)[0]
+    return text
+
+
+def extract_source_titles_from_answer(answer: str, evidence: list[EvidenceItem]) -> list[str]:
+    allowed = evidence_titles(evidence)
+    if not allowed:
+        return []
+    sources_part = ""
+    split = re.split(r"(?is)(?:^|\n|[.!?]\s+)sources?\s*/?\s*evidence\b", answer or "", maxsplit=1)
+    if len(split) == 2:
+        sources_part = split[1]
+    found: list[str] = []
+    blob = (sources_part or _answer_body(answer) or "").lower()
+    for title in allowed:
+        if title.lower() in blob and title not in found:
+            found.append(title)
+    return found or supporting_titles_for_text(_answer_body(answer), evidence, allowed)
+
+
+def supporting_titles_for_text(
+    text: str,
+    evidence: list[EvidenceItem],
+    fallback: list[str] | None = None,
+    limit: int = 4,
+) -> list[str]:
+    blob = (text or "").lower()
+    tokens = set(re.findall(r"[a-z]{5,}", blob))
+    ranked: list[tuple[int, str]] = []
+    seen: set[str] = set()
+    for item in evidence:
+        title = (item.title or item.document_name or "").strip()
+        key = title.lower()
+        if not title or key in seen:
+            continue
+        ev = f"{item.title or ''} {item.document_name or ''} {item.passage or ''}".lower()
+        score = len(tokens & set(re.findall(r"[a-z]{5,}", ev)))
+        if key in blob:
+            score += 6
+        if score >= 3:
+            ranked.append((score, title))
+            seen.add(key)
+    ranked.sort(key=lambda row: (-row[0], row[1]))
+    titles = [title for _score, title in ranked[:limit]]
+    if titles:
+        return titles
+    out: list[str] = []
+    for title in fallback or evidence_titles(evidence, limit=limit):
+        if title not in out:
+            out.append(title)
+        if len(out) >= limit:
+            break
+    return out
+
+
+def mechanism_allowed(action: str, evidence: list[EvidenceItem], context: EnvironmentalContext, user_message: str = "") -> bool:
+    text = action or ""
+    blob = f"{user_message or ''} " + " ".join(
+        f"{item.passage or ''} {item.title or ''}" for item in evidence
+    )
+    user_has_rotation = bool(re.search(r"crop rotation|diversified rotation|rotational cropping", user_message or "", re.I))
+    if re.search(r"crop rotation|diversified rotation|rotational cropping", text, re.I):
+        if not user_has_rotation and (context.land.land_use == "intercropping" or (context.land.crop or "").lower() == "wheat"):
+            return False
+        if not re.search(r"crop rotation|diversified rotation|rotational cropping", blob, re.I):
+            return False
+    if pesticide_use_is_none(context) and re.search(r"pesticide|insecticide|herbicide|agrochemical", text, re.I):
+        return False
+    if re.search(r"plant crowding|moisture.{0,40}crowd|crowds plants", text, re.I) and not re.search(
+        r"crowd|plant crowding", blob, re.I
+    ):
+        return False
+    return True
+
+
+def parse_recommendation_items(
+    answer: str,
+    metrics: list[ImpactedMetric],
+    horizon: str | None,
+    sources: list[str],
+) -> list[RecommendationItem]:
+    items: list[RecommendationItem] = []
+    body = _answer_body(answer)
+    for match in _ITEM_LINE.finditer(body):
+        chunk = re.sub(r"\s+", " ", match.group(1)).strip(" ;")
+        if len(chunk) < 20:
+            continue
+        if _looks_like_source_line(chunk, sources):
+            continue
+        action, sep, why = chunk.partition(" — ")
+        if not sep:
+            action, sep, why = chunk.partition(" – ")
+        if not sep:
+            action, sep, why = chunk.partition(" - ")
+        if not sep:
+            sentences = re.split(r"(?<=[.!?])\s+", chunk, maxsplit=1)
+            action = sentences[0]
+            why = sentences[1] if len(sentences) > 1 else ""
+        items.append(
+            RecommendationItem(
+                action=action.strip(),
+                why=why.strip(),
+                impacted_metrics=metrics,
+                time_horizon=horizon,
+                supporting_evidence=sources,
+            )
+        )
+    return items
+
+
+def _dedupe_items(items: list[RecommendationItem]) -> list[RecommendationItem]:
+    unique: list[RecommendationItem] = []
+    seen: list[set[str]] = []
+    seen_text: set[str] = set()
+    for item in items:
+        action = (item.action or "").strip()
+        key = re.sub(r"\s+", " ", action.lower())
+        if not action or key in seen_text:
+            continue
+        keys = intervention_keys(action)
+        if keys and any(keys <= existing or existing <= keys for existing in seen):
+            continue
+        seen_text.add(key)
+        if keys:
+            seen.append(keys)
+        unique.append(item)
+    return unique
+
+
+def complete_recommendation(
+    rec: RecommendationBlock | None,
+    answer: str,
+    context: EnvironmentalContext,
+    evidence: list[EvidenceItem],
+    *,
+    user_message: str = "",
+) -> RecommendationBlock:
+    base = rec or RecommendationBlock(action="", why_it_works="", environmental_relationships="")
+    extracted_horizon = extract_horizon_from_answer(answer)
+    if extracted_horizon and not (base.time_horizon.narrative or "").strip():
+        base.time_horizon.narrative = extracted_horizon
+    horizon = sanitize_time_horizon(base.time_horizon, evidence)
+    horizon_text = (horizon.narrative or "").strip() or "No specific timeframe is supported by the retrieved evidence."
+    sources = extract_source_titles_from_answer(answer, evidence) or evidence_titles(evidence)
+    metrics = soften_metrics(extract_metrics_from_text(answer, base.impacted_metrics, evidence))
+    action = (base.action or "").strip()
+    why = (base.why_it_works or "").strip() or extract_why_from_answer(answer)
+    relationships = (base.environmental_relationships or "").strip()
+    if action and not mechanism_allowed(action, evidence, context, user_message):
+        action = ""
+    if why and not mechanism_allowed(why, evidence, context, user_message):
+        why = extract_why_from_answer(answer)
+        if why and not mechanism_allowed(why, evidence, context, user_message):
+            why = ""
+    if relationships and not mechanism_allowed(relationships, evidence, context, user_message):
+        relationships = ""
+    items = [
+        item
+        for item in (base.items or [])
+        if mechanism_allowed(item.action, evidence, context, user_message)
+        and (not item.why or mechanism_allowed(item.why, evidence, context, user_message))
+        and not _looks_like_source_line(item.action, sources)
+    ]
+    parsed = parse_recommendation_items(answer, metrics, horizon_text, sources)
+    if parsed:
+        existing_keys = [intervention_keys(item.action) for item in items]
+        for item in parsed:
+            if not mechanism_allowed(item.action, evidence, context, user_message):
+                continue
+            if item.why and not mechanism_allowed(item.why, evidence, context, user_message):
+                continue
+            keys = intervention_keys(item.action)
+            if keys and any(keys <= existing or existing <= keys for existing in existing_keys if existing):
+                continue
+            items.append(item)
+            if keys:
+                existing_keys.append(keys)
+    if not items:
+        for part in split_recommendation_text(action):
+            if part and mechanism_allowed(part, evidence, context, user_message):
+                items.append(
+                    RecommendationItem(
+                        action=part,
+                        why=why,
+                        impacted_metrics=metrics,
+                        time_horizon=horizon_text,
+                        supporting_evidence=sources,
+                    )
+                )
+    items = _dedupe_items(items)
+    if action and not mechanism_allowed(action, evidence, context, user_message):
+        action = "; ".join(item.action for item in items)
+    if not action:
+        first_line = next((line.strip() for line in (answer or "").splitlines() if len(line.strip()) > 40), answer[:280])
+        action = (first_line or "")[:400]
+        if action and not mechanism_allowed(action, evidence, context, user_message):
+            action = "; ".join(item.action for item in items) if items else ""
+    if items:
+        if not why:
+            why = " ".join(item.why for item in items if item.why).strip() or extract_why_from_answer(answer)
+        if not action:
+            action = "; ".join(item.action for item in items)
+        for item in items:
+            if not item.impacted_metrics:
+                item.impacted_metrics = metrics
+            if not item.time_horizon:
+                item.time_horizon = horizon_text
+            if not item.supporting_evidence:
+                item.supporting_evidence = supporting_titles_for_text(
+                    f"{item.action} {item.why}",
+                    evidence,
+                    sources,
+                )
+            if not item.why:
+                item.why = why
+        sources = list(dict.fromkeys([*sources, *[title for item in items for title in item.supporting_evidence]]))
+    elif why and metrics:
+        items = [
+            RecommendationItem(
+                action=action,
+                why=why,
+                impacted_metrics=metrics,
+                time_horizon=horizon_text,
+                supporting_evidence=sources,
+            )
+        ]
+    return RecommendationBlock(
+        action=action,
+        why_it_works=why,
+        environmental_relationships=relationships,
+        impacted_metrics=metrics,
+        time_horizon=horizon,
+        uncertainty=base.uncertainty,
+        confidence=base.confidence,
+        confidence_rationale=base.confidence_rationale,
+        items=items,
+        supporting_evidence=sources,
+    )

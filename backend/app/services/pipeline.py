@@ -16,18 +16,17 @@ from app.models.schemas import (
     DebugRetrieval,
     EnvironmentalContext,
     EvidenceItem,
+    ImpactedMetric,
     RecommendationBlock,
+    RecommendationItem,
     StructuredInput,
 )
 from app.services.evidence import (
     STATUS_LABELS,
-    claims_from_answer,
-    sanitize_answer_against_evidence,
+    ground_answer,
     select_evidence,
     should_search_external,
     status_from_evidence,
-    strip_unsupported_language,
-    verify_claims,
 )
 from app.services.extraction import (
     extract_from_text,
@@ -47,11 +46,14 @@ from app.services.llm import (
 )
 from app.services.memory import store
 from app.services.prompting import (
+    _answer_body,
     answer_length_band,
     build_stream_user_prompt,
+    complete_recommendation,
     ensure_grounded_sources,
     ensure_material_variables,
     filter_evidence_for_answer,
+    intervention_keys,
     predict_budget,
     streaming_system_prompt,
 )
@@ -125,21 +127,57 @@ def recommendation_from_answer(
     answer: str,
     context: EnvironmentalContext,
     evidence: list[EvidenceItem],
+    rec: RecommendationBlock | None = None,
+    *,
+    user_message: str = "",
 ) -> RecommendationBlock:
     relationships, used = describe_relationships(context)
     mentioned: list[str] = []
-    lowered = answer.lower()
+    seed_items: list[RecommendationItem] = []
+    body = _answer_body(answer).lower()
+    body_keys = intervention_keys(body)
     for item in candidate_payload(context):
         action = str(item.get("action") or item.get("idea") or "").strip()
         keywords = [str(token).lower() for token in (item.get("keywords") or []) if token]
-        if action and (any(token in lowered for token in keywords[:4]) or action.lower()[:24] in lowered):
+        keys = intervention_keys(action)
+        keyword_hits = sum(1 for token in keywords if token in body)
+        if action and (
+            action.lower()[:24] in body
+            or keyword_hits >= 2
+            or (keys and keys <= body_keys)
+            or (keys and (keys & body_keys) and keyword_hits >= 1)
+        ):
             if action not in mentioned:
                 mentioned.append(action)
-    first_line = next((line.strip() for line in answer.splitlines() if len(line.strip()) > 40), answer[:280])
+            why = str(item.get("why") or item.get("why_candidate") or "").strip()
+            raw_metrics = item.get("metrics") or []
+            metrics: list[ImpactedMetric] = []
+            for metric in raw_metrics:
+                if isinstance(metric, ImpactedMetric):
+                    metrics.append(metric)
+                elif isinstance(metric, dict) and metric.get("name"):
+                    metrics.append(
+                        ImpactedMetric(
+                            name=str(metric["name"]),
+                            direction="unknown",
+                            note=str(metric.get("note") or "potentially affected"),
+                        )
+                    )
+            seed_items.append(
+                RecommendationItem(
+                    action=action,
+                    why=why,
+                    impacted_metrics=metrics,
+                )
+            )
+    first_line = next(
+        (line.strip() for line in _answer_body(answer).splitlines() if len(line.strip()) > 40),
+        _answer_body(answer)[:280],
+    )
     action = "; ".join(mentioned[:4]) if mentioned else first_line[:400]
     distinct_sources = len({item.document_name for item in evidence})
     confidence, rationale = confidence_for(context, len(evidence), distinct_sources, len(used))
-    return RecommendationBlock(
+    seed = rec or RecommendationBlock(
         action=action,
         why_it_works="",
         environmental_relationships=relationships,
@@ -147,7 +185,72 @@ def recommendation_from_answer(
         uncertainty=None,
         confidence=confidence,  # type: ignore[arg-type]
         confidence_rationale=rationale,
+        items=seed_items,
     )
+    if not seed.action:
+        seed.action = action
+    if not seed.environmental_relationships:
+        seed.environmental_relationships = relationships
+    if not seed.confidence_rationale:
+        seed.confidence = confidence  # type: ignore[arg-type]
+        seed.confidence_rationale = rationale
+    if not seed.items and seed_items:
+        seed.items = seed_items
+    if not (seed.why_it_works or "").strip():
+        seed.why_it_works = " ".join(item.why for item in (seed.items or seed_items) if item.why).strip()
+    if not seed.impacted_metrics:
+        merged: list[ImpactedMetric] = []
+        for item in seed.items or seed_items:
+            for metric in item.impacted_metrics:
+                if all(existing.name.lower() != metric.name.lower() for existing in merged):
+                    merged.append(metric)
+        seed.impacted_metrics = merged
+    return complete_recommendation(
+        seed,
+        answer,
+        context,
+        evidence,
+        user_message=user_message,
+    )
+
+
+def _apply_grounding(
+    prepared: PreparedChat,
+    draft: str,
+    rec: RecommendationBlock | None = None,
+    claims: list[ClaimEvidenceLink] | None = None,
+) -> tuple[str, list[ClaimEvidenceLink], RecommendationBlock, list[EvidenceItem], list[EvidenceItem]]:
+    answer, claims = ground_answer(
+        draft,
+        prepared.selected,
+        user_message=prepared.message,
+        context=prepared.context,
+        claims=claims,
+    )
+    answer = ensure_material_variables(answer, prepared.context)
+    answer, claims = ground_answer(
+        answer,
+        prepared.selected,
+        user_message=prepared.message,
+        context=prepared.context,
+        claims=claims,
+    )
+    used_kb, used_ext = filter_evidence_for_answer(
+        answer,
+        claims,
+        [],
+        prepared.kb_selected,
+        prepared.ext_selected,
+    )
+    answer = ensure_grounded_sources(answer, used_kb, used_ext)
+    rec = recommendation_from_answer(
+        answer,
+        prepared.context,
+        [*used_kb, *used_ext],
+        rec,
+        user_message=prepared.message,
+    )
+    return answer, claims, rec, used_kb, used_ext
 
 
 @dataclass
@@ -451,17 +554,14 @@ def handle_chat(payload: ChatRequest) -> ChatResponse:
 
     t_ground = time.perf_counter()
     claims = [ClaimEvidenceLink(**item) for item in raw.get("_claims") or []]
-    claims = verify_claims(claims, prepared.selected)
-    answer = strip_unsupported_language(str(raw.get("_answer") or rec.action), claims)
-    answer = sanitize_answer_against_evidence(answer, prepared.selected, user_message=prepared.message)
-    if any(claim.support == "unsupported" for claim in claims):
-        prepared.warnings.append(
-            "Some model claims were not supported by retrieved passages and were treated as unverified."
-        )
-    if "_kb_used" in raw:
-        prepared.kb_selected = raw["_kb_used"]
-    if "_ext_used" in raw:
-        prepared.ext_selected = raw["_ext_used"]
+    answer, claims, rec, used_kb, used_ext = _apply_grounding(
+        prepared,
+        str(raw.get("_answer") or rec.action),
+        rec,
+        claims,
+    )
+    prepared.kb_selected = used_kb or raw.get("_kb_used") or prepared.kb_selected
+    prepared.ext_selected = used_ext or raw.get("_ext_used") or prepared.ext_selected
     prepared.timings["grounding_ms"] = _ms(t_ground)
     return _finalize_response(
         prepared=prepared,
@@ -539,22 +639,7 @@ def handle_chat_stream(payload: ChatRequest) -> Iterator[dict[str, Any]]:
         return
 
     t_ground = time.perf_counter()
-    claims = claims_from_answer(draft, prepared.selected)
-    claims = verify_claims(claims, prepared.selected)
-    answer = strip_unsupported_language(draft, claims)
-    answer = sanitize_answer_against_evidence(answer, prepared.selected, user_message=prepared.message)
-    answer = ensure_material_variables(answer, prepared.context)
-    used_kb, used_ext = filter_evidence_for_answer(answer, claims, [], prepared.kb_selected, prepared.ext_selected)
-    answer = ensure_grounded_sources(answer, used_kb, used_ext)
-    if any(claim.support == "unsupported" for claim in claims):
-        prepared.warnings.append(
-            "Some model claims were not supported by retrieved passages and were treated as unverified."
-        )
-        answer = (
-            answer
-            + "\n\nSome generated statements were not supported by the retrieved passages and should not be treated as verified."
-        )
-    rec = recommendation_from_answer(answer, prepared.context, [*used_kb, *used_ext])
+    answer, claims, rec, used_kb, used_ext = _apply_grounding(prepared, draft)
     prepared.timings["grounding_ms"] = _ms(t_ground)
     response = _finalize_response(
         prepared=prepared,

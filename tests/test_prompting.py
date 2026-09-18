@@ -11,13 +11,15 @@ from app.models.schemas import (
 )
 from app.services.evidence import sanitize_answer_against_evidence
 from app.services.llm import RecordingLLM
-from app.services.pipeline import handle_chat
+from app.services.pipeline import handle_chat, recommendation_from_answer
 from app.services.prompting import (
     SYSTEM_PROMPT,
     build_user_prompt,
     compose_user_facing_answer,
+    complete_recommendation,
     dedupe_recommendations,
     ensure_grounded_sources,
+    extract_metrics_from_text,
     filter_evidence_for_answer,
     sanitize_time_horizon,
     word_count,
@@ -226,3 +228,143 @@ def test_filter_drops_unused_deforestation_source():
     names = " ".join(item.document_name for item in kept_kb)
     assert "soil_organic_carbon" in names
     assert "deforestation" not in names
+
+
+def test_extract_metrics_keeps_known_names_only():
+    answer = (
+        "Cover crops may help where soil organic carbon is low.\n"
+        "Metrics these changes could affect: Soil organic carbon: possible change: gradual if residue is kept; "
+        "Soil moisture: possible local improvement, depending on establishment and landscape context. Cover can appear in a season; "
+        "soil carbon usually takes years. These are evidence-informed suggestions, not guaranteed field outcomes.\n\n"
+        "Sources / Evidence\n"
+        "- Rainfall, Drought and Species Survival\n"
+    )
+    names = [metric.name.lower() for metric in extract_metrics_from_text(answer)]
+    assert "soil organic carbon" in names
+    assert "soil moisture" in names
+    assert not any("depending on establishment" in name for name in names)
+    assert not any("sources" in name for name in names)
+    assert "species survival" not in names
+
+
+def test_stream_answer_maps_recommendation_panel_fields():
+    context = EnvironmentalContext(
+        soil=SoilContext(organic_carbon=0.3, moisture="low"),
+        land=LandContext(land_use="monoculture", crop="wheat"),
+        climate=ClimateContext(rainfall="low"),
+    )
+    kb = [
+        EvidenceItem(
+            evidence_id="kb-soil",
+            source="01.md",
+            document_name="01_soil_organic_carbon_biodiversity.md",
+            title="Soil Organic Carbon, Soil pH, Moisture and Below-Ground Biodiversity",
+            passage="Cover crops and residue retention are relevant where SOC and moisture are jointly low over multiple years.",
+            origin="knowledge_base",
+        ),
+        EvidenceItem(
+            evidence_id="kb-cover",
+            source="02.md",
+            document_name="02_cover_crops_residue.md",
+            title="Cover Crops, Residue Retention and Water-Holding Capacity in Semi-Arid Farming",
+            passage="Drought-tolerant cover crops and residue can support water holding in semi-arid systems.",
+            origin="knowledge_base",
+        ),
+        EvidenceItem(
+            evidence_id="kb-forest",
+            source="07.md",
+            document_name="07_deforestation_fragmentation_biodiversity.md",
+            title="Deforestation and fragmentation",
+            passage="Forest remnants and canopy corridors affect area-sensitive forest species.",
+            origin="knowledge_base",
+        ),
+    ]
+    answer = (
+        "Based on the conditions you described, several factors may be interacting. "
+        "Low soil carbon and low rainfall can interact, so living roots and residue may help. "
+        "Drought-tolerant cover crops and residue can help rebuild soil function. "
+        "Impacted metrics these changes could affect: soil organic carbon; soil moisture. "
+        "No specific timeframe is supported by the retrieved evidence.\n\n"
+        "Sources / Evidence\n"
+        "- Soil Organic Carbon, Soil pH, Moisture and Below-Ground Biodiversity\n"
+        "- Cover Crops, Residue Retention and Water-Holding Capacity in Semi-Arid Farming\n"
+    )
+    rec = complete_recommendation(None, answer, context, kb, user_message="What should I do on my wheat farm?")
+    assert rec.why_it_works
+    names = {metric.name.lower() for metric in rec.impacted_metrics}
+    assert "soil organic carbon" in names
+    assert rec.time_horizon.narrative
+    assert rec.supporting_evidence
+    assert all("deforest" not in title.lower() for title in rec.supporting_evidence)
+    assert rec.items
+    assert all(item.why for item in rec.items)
+    assert all(item.impacted_metrics for item in rec.items)
+    assert all(item.supporting_evidence for item in rec.items)
+
+
+def test_recommendation_does_not_use_source_titles_as_actions():
+    context = EnvironmentalContext(
+        soil=SoilContext(organic_carbon=0.3, moisture="low"),
+        land=LandContext(land_use="monoculture", crop="wheat"),
+        climate=ClimateContext(rainfall="low"),
+    )
+    evidence = [
+        EvidenceItem(
+            evidence_id="kb-cover",
+            source="02.md",
+            document_name="02_cover_crops_residue.md",
+            title="Cover Crops, Residue Retention and Water-Holding Capacity in Semi-Arid Farming",
+            passage="Cover crops and residue retention can support water holding in dry seasons.",
+            origin="knowledge_base",
+        )
+    ]
+    answer = (
+        "Low soil carbon and low rainfall can interact in this wheat field. "
+        "Sources / Evidence\n"
+        "- Cover Crops, Residue Retention and Water-Holding Capacity in Semi-Arid Farming\n"
+    )
+    rec = recommendation_from_answer(answer, context, evidence, user_message="What should I do?")
+    blob = (rec.action + " " + " ".join(item.action for item in rec.items)).lower()
+    assert "drought-tolerant cover crops matched to the rainfall window" not in blob
+    assert rec.why_it_works
+    assert rec.supporting_evidence
+
+
+def test_complete_recommendation_drops_evidence_id_bullets():
+    context = EnvironmentalContext(
+        soil=SoilContext(organic_carbon=0.3, moisture="low"),
+        land=LandContext(land_use="monoculture", crop="wheat"),
+        climate=ClimateContext(rainfall="low"),
+    )
+    kb = [
+        EvidenceItem(
+            evidence_id="kb-76",
+            source="01.md",
+            document_name="01_soil_organic_carbon_biodiversity.md",
+            title="Soil Organic Carbon, Soil pH, Moisture and Below-Ground Biodiversity",
+            passage="Cover crops and residue can support soil function over multiple years.",
+            origin="knowledge_base",
+        )
+    ]
+    rec = complete_recommendation(
+        RecommendationBlock(
+            action="Keep residue and add drought-tolerant cover crops",
+            why_it_works="Low soil carbon and low rainfall can interact.",
+            environmental_relationships="",
+            items=[],
+        ),
+        (
+            "Drought-tolerant cover crops and residue can help rebuild soil function.\n"
+            "1. Keep residue and add drought-tolerant cover crops — Low soil carbon and low rainfall can interact.\n"
+            "2. kb-76: Soil Organic Carbon, Soil pH, Moisture and Below-Ground Biodiversity\n"
+            "3. kb-80: Rainfall, Drought and Species Survival\n"
+        ),
+        context,
+        kb,
+        user_message="What should I do?",
+    )
+    actions = " ".join(item.action for item in rec.items).lower()
+    assert "kb-76" not in actions
+    assert "kb-80" not in actions
+    assert rec.items
+    assert all(item.why for item in rec.items)

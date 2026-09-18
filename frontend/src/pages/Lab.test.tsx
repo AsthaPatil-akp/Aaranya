@@ -1,6 +1,7 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ChatResponse, postChatStream } from "../api";
+import { downloadActionPlanPdf } from "../actionPlanPdf";
 import { Lab } from "./Lab";
 
 vi.mock("../api", async () => {
@@ -11,6 +12,10 @@ vi.mock("../api", async () => {
     searchLocations: vi.fn(async () => []),
   };
 });
+
+vi.mock("../actionPlanPdf", () => ({
+  downloadActionPlanPdf: vi.fn(),
+}));
 
 vi.mock("../components/LocationPicker", () => ({
   LocationPicker: ({ onSelect }: { onSelect: (lat: number, lng: number) => void }) => (
@@ -42,15 +47,19 @@ describe("Intelligence Lab land details", () => {
   beforeEach(() => {
     vi.mocked(postChatStream).mockReset();
     vi.mocked(postChatStream).mockResolvedValue(emptyResponse);
+    vi.mocked(downloadActionPlanPdf).mockReset();
   });
 
-  it("opens and closes the optional land details form", () => {
+  it("opens and closes the optional land details dialog", () => {
     render(<Lab />);
-    expect(screen.queryByTestId("land-details-form")).not.toBeInTheDocument();
-    fireEvent.click(screen.getByTestId("add-land-details"));
+    const addLand = screen.getByTestId("add-land-details");
+    expect(addLand).toHaveClass("inverse");
+    expect(screen.queryByRole("dialog", { name: "Add land details" })).not.toBeInTheDocument();
+    fireEvent.click(addLand);
+    expect(screen.getByRole("dialog", { name: "Add land details" })).toBeInTheDocument();
     expect(screen.getByTestId("land-details-form")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Close" }));
-    expect(screen.queryByTestId("land-details-form")).not.toBeInTheDocument();
+    expect(screen.queryByRole("dialog", { name: "Add land details" })).not.toBeInTheDocument();
   });
 
   it("sends structured land details with the chat message", async () => {
@@ -77,6 +86,127 @@ describe("Intelligence Lab land details", () => {
     expect(screen.getByTestId("land-detail-chips")).toBeInTheDocument();
   });
 
+  it("renders impacted metrics returned by the backend", async () => {
+    vi.mocked(postChatStream).mockResolvedValue({
+      ...emptyResponse,
+      mode: "recommendation",
+      assistant_message: "Keep residue and add cover crops.",
+      knowledge_status: "grounded_in_knowledge_base",
+      knowledge_status_label: "Grounded in knowledge base",
+      kb_evidence: [
+        {
+          source: "01.md",
+          document_name: "01.md",
+          title: "Unused retrieved title",
+          page: null,
+          topic: null,
+          document_type: null,
+          passage: "Unused.",
+          relevance_score: 0.1,
+          origin: "knowledge_base",
+        },
+      ],
+      recommendation: {
+        action: "Keep residue and add drought-tolerant cover crops.",
+        why_it_works: "Retrieved passages link residue to soil function.",
+        environmental_relationships: "Soil carbon and moisture may interact.",
+        impacted_metrics: [
+          { name: "Soil organic carbon", direction: "unknown", note: "potentially affected" },
+          { name: "Pollinator diversity", direction: "unknown", note: "possible local improvement" },
+        ],
+        time_horizon: {
+          narrative: "No specific timeframe is supported by the retrieved evidence.",
+          evidence_supported: false,
+        },
+        uncertainty: "Local trials are still needed.",
+        confidence: "medium",
+        confidence_rationale: "Retrieved passages were available.",
+        items: [
+          {
+            action: "Keep residue and add drought-tolerant cover crops.",
+            why: "Retrieved passages link residue to soil function.",
+            impacted_metrics: [
+              { name: "Soil organic carbon", direction: "unknown", note: "potentially affected" },
+            ],
+            time_horizon: "No specific timeframe is supported by the retrieved evidence.",
+            supporting_evidence: ["Soil Organic Carbon, Soil pH, Moisture and Below-Ground Biodiversity"],
+          },
+          {
+            action: "kb-76: Soil Organic Carbon, Soil pH, Moisture and Below-Ground Biodiversity",
+            why: "Should not appear as a recommendation.",
+            impacted_metrics: [],
+            time_horizon: "",
+            supporting_evidence: [],
+          },
+        ],
+        supporting_evidence: ["Soil Organic Carbon, Soil pH, Moisture and Below-Ground Biodiversity"],
+      },
+    });
+    render(<Lab />);
+    fireEvent.change(screen.getByPlaceholderText(/Type a new question/), {
+      target: { value: "What should I do on my wheat farm?" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+    expect(await screen.findByTestId("recommendation-panel")).toBeInTheDocument();
+    const panel = screen.getByTestId("recommendation-panel");
+    expect(within(panel).getByText(/Keep residue and add drought-tolerant cover crops/)).toBeInTheDocument();
+    expect(within(panel).getByText(/Retrieved passages link residue to soil function/)).toBeInTheDocument();
+    expect(within(panel).getByText(/Soil organic carbon/)).toBeInTheDocument();
+    expect(within(panel).getByText(/potentially affected/)).toBeInTheDocument();
+    expect(within(panel).getByText(/No specific timeframe is supported by the retrieved evidence/)).toBeInTheDocument();
+    expect(within(panel).getByText(/Soil Organic Carbon, Soil pH, Moisture and Below-Ground Biodiversity/)).toBeInTheDocument();
+    expect(within(panel).queryByText("Unused retrieved title")).not.toBeInTheDocument();
+    expect(within(panel).queryByText(/Duplicate should be hidden/)).not.toBeInTheDocument();
+    expect(within(panel).queryByText(/kb-76/)).not.toBeInTheDocument();
+    expect(within(panel).getByText(/Why:/)).toBeInTheDocument();
+    expect(within(panel).getByText(/Supporting evidence/)).toBeInTheDocument();
+  });
+
+  it("maps parent recommendation fields when item details are empty", async () => {
+    vi.mocked(postChatStream).mockResolvedValue({
+      ...emptyResponse,
+      mode: "recommendation",
+      assistant_message: "Cover crops may help in this dry wheat field.",
+      knowledge_status: "grounded_in_knowledge_base",
+      knowledge_status_label: "Grounded in knowledge base",
+      recommendation: {
+        action: "Use drought-tolerant cover crops in the fallow window.",
+        why_it_works: "Low soil carbon and low rainfall interact.",
+        environmental_relationships: "Organic carbon and rainfall act together.",
+        impacted_metrics: [
+          { name: "Soil organic carbon", direction: "unknown", note: "potentially affected" },
+        ],
+        time_horizon: {
+          narrative: "Several seasons to multiple years",
+          evidence_supported: true,
+        },
+        uncertainty: null,
+        confidence: "medium",
+        confidence_rationale: "Retrieved passages were available.",
+        items: [
+          {
+            action: "Use drought-tolerant cover crops in the fallow window.",
+            why: "",
+            impacted_metrics: [],
+            time_horizon: "",
+            supporting_evidence: [],
+          },
+        ],
+        supporting_evidence: ["Cover Crops, Residue Retention and Water-Holding Capacity in Semi-Arid Farming"],
+      },
+    });
+    render(<Lab />);
+    fireEvent.click(screen.getByRole("button", { name: "Demo: farm profile" }));
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+    expect(await screen.findByTestId("recommendation-panel")).toBeInTheDocument();
+    expect(screen.getByText(/Low soil carbon and low rainfall interact/)).toBeInTheDocument();
+    expect(screen.getByText(/Soil organic carbon/)).toBeInTheDocument();
+    expect(screen.getByText(/Several seasons to multiple years/)).toBeInTheDocument();
+    expect(
+      screen.getByText(/Cover Crops, Residue Retention and Water-Holding Capacity in Semi-Arid Farming/),
+    ).toBeInTheDocument();
+  });
+
   it("keeps existing chat send behaviour when the form is unused", async () => {
     render(<Lab />);
     expect(screen.getByRole("button", { name: "Demo: incomplete" })).toBeInTheDocument();
@@ -92,5 +222,30 @@ describe("Intelligence Lab land details", () => {
       debug: true,
     });
     expect(payload.structured).toBeUndefined();
+  });
+
+  it("copies an assistant answer", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.assign(navigator, { clipboard: { writeText } });
+    render(<Lab />);
+    fireEvent.change(screen.getByPlaceholderText(/Type a new question/), {
+      target: { value: "Biodiversity is declining on my farm." },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+    expect(await screen.findByRole("button", { name: "Copy answer" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Copy answer" }));
+    await waitFor(() => expect(writeText).toHaveBeenCalledWith(emptyResponse.assistant_message));
+    expect(screen.getByRole("button", { name: "Answer copied" })).toBeInTheDocument();
+  });
+
+  it("offers an action plan PDF beside a completed response", async () => {
+    render(<Lab />);
+    fireEvent.change(screen.getByPlaceholderText(/Type a new question/), {
+      target: { value: "Biodiversity is declining on my farm." },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+    const button = await screen.findByRole("button", { name: "Download Action Plan PDF" });
+    fireEvent.click(button);
+    expect(downloadActionPlanPdf).toHaveBeenCalledWith(emptyResponse, expect.any(Object));
   });
 });

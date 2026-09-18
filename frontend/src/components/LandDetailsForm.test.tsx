@@ -50,6 +50,18 @@ describe("LandDetailsForm", () => {
     expect(stored.longitude).toBe("73.8567");
   });
 
+  it("lets the user type a location in one go", () => {
+    render(<Harness />);
+    const input = screen.getByPlaceholderText("Search a place or type a location");
+    fireEvent.change(screen.getByPlaceholderText("e.g. wheat"), { target: { value: "wheat" } });
+    fireEvent.change(input, { target: { value: "s" } });
+    fireEvent.change(input, { target: { value: "sh" } });
+    fireEvent.change(input, { target: { value: "shah" } });
+    expect(input).toHaveValue("shah");
+    fireEvent.blur(input);
+    expect(JSON.parse(screen.getByTestId("payload").textContent || "{}").location).toBe("shah");
+  });
+
   it("stores coordinates from a location search result", async () => {
     render(<Harness />);
     fireEvent.change(screen.getByPlaceholderText("Search a place or type a location"), {
@@ -64,9 +76,22 @@ describe("LandDetailsForm", () => {
     expect(stored.longitude).toBe("73.8567");
   });
 
+  it("opens a large map and returns to the compact view", () => {
+    render(<Harness />);
+    fireEvent.click(screen.getByRole("button", { name: "View large map" }));
+    expect(screen.getByTestId("land-map-stage")).toHaveClass("expanded");
+    expect(screen.getByRole("button", { name: "Close large map" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(screen.getByTestId("land-map-stage")).not.toHaveClass("expanded");
+    fireEvent.click(screen.getByRole("button", { name: "View large map" }));
+    fireEvent.click(screen.getByRole("button", { name: "Close large map" }));
+    expect(screen.getByTestId("land-map-stage")).not.toHaveClass("expanded");
+  });
+
   it("closes when requested", () => {
     const onClose = vi.fn();
     render(<Harness onClose={onClose} />);
+    expect(screen.getByRole("dialog", { name: "Add land details" })).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Close" }));
     expect(onClose).toHaveBeenCalledTimes(1);
   });

@@ -6,9 +6,10 @@ type Props = {
   latitude: number | null;
   longitude: number | null;
   onSelect: (latitude: number, longitude: number) => void;
+  expanded?: boolean;
 };
 
-export function LocationPicker({ latitude, longitude, onSelect }: Props) {
+export function LocationPicker({ latitude, longitude, onSelect, expanded = false }: Props) {
   const hostRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<L.Map | null>(null);
   const markerRef = useRef<L.CircleMarker | null>(null);
@@ -28,8 +29,13 @@ export function LocationPicker({ latitude, longitude, onSelect }: Props) {
       onSelectRef.current(Number(event.latlng.lat.toFixed(5)), Number(event.latlng.lng.toFixed(5)));
     });
     mapRef.current = map;
-    setTimeout(() => map.invalidateSize(), 80);
+    const redraw = () => map.invalidateSize();
+    setTimeout(redraw, 80);
+    setTimeout(redraw, 250);
+    const observer = new ResizeObserver(() => redraw());
+    observer.observe(hostRef.current);
     return () => {
+      observer.disconnect();
       map.remove();
       mapRef.current = null;
       markerRef.current = null;
@@ -52,5 +58,18 @@ export function LocationPicker({ latitude, longitude, onSelect }: Props) {
     map.setView([latitude, longitude], Math.max(map.getZoom(), 8));
   }, [latitude, longitude]);
 
-  return <div className="land-map" ref={hostRef} role="application" aria-label="Select a point on the map" />;
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map) return;
+    if (expanded) map.scrollWheelZoom.enable();
+    else map.scrollWheelZoom.disable();
+    const first = window.setTimeout(() => map.invalidateSize(), 60);
+    const second = window.setTimeout(() => map.invalidateSize(), 220);
+    return () => {
+      window.clearTimeout(first);
+      window.clearTimeout(second);
+    };
+  }, [expanded]);
+
+  return <div className={`land-map${expanded ? " expanded" : ""}`} ref={hostRef} role="application" aria-label="Select a point on the map" />;
 }

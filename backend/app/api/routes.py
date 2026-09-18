@@ -16,6 +16,7 @@ from app.models.schemas import (
     SearchRequest,
 )
 from app.services.embeddings import get_embedder
+from app.services.geocode import search_places
 from app.services.ingest import knowledge_store
 from app.services.llm import configured_llm_model, llm_is_available, llm_is_configured
 from app.services.memory import store
@@ -85,36 +86,7 @@ def chat_stream(payload: ChatRequest) -> StreamingResponse:
 
 @router.get("/geocode")
 def geocode(q: str = "") -> list[dict]:
-    query = (q or "").strip()
-    if len(query) < 2:
-        return []
-    settings = get_settings()
-    try:
-        import httpx
-
-        response = httpx.get(
-            "https://nominatim.openstreetmap.org/search",
-            params={"q": query, "format": "json", "limit": 5},
-            headers={"User-Agent": f"Darukaa.Earth prototype ({settings.openalex_mailto})"},
-            timeout=10.0,
-        )
-        if response.status_code >= 400:
-            return []
-        rows = []
-        for item in response.json() or []:
-            try:
-                rows.append(
-                    {
-                        "label": item.get("display_name") or query,
-                        "latitude": float(item["lat"]),
-                        "longitude": float(item["lon"]),
-                    }
-                )
-            except (KeyError, TypeError, ValueError):
-                continue
-        return rows
-    except Exception:
-        return []
+    return search_places(q)
 
 
 @router.post("/analyze", response_model=ChatResponse)

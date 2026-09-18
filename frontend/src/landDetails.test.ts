@@ -19,6 +19,16 @@ describe("optional land details payload", () => {
     ).toEqual({ crop: "wheat" });
   });
 
+  it("sends pesticide_use without mapping it to pollution", () => {
+    const payload = toStructuredPayload({
+      ...EMPTY_LAND_DETAILS,
+      pesticide_use: "none",
+      crop: "wheat",
+    });
+    expect(payload).toEqual({ crop: "wheat", pesticide_use: "none" });
+    expect(payload).not.toHaveProperty("pollution");
+  });
+
   it("stores numeric coordinates when a map point is selected", () => {
     const payload = toStructuredPayload({
       ...EMPTY_LAND_DETAILS,

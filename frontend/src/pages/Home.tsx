@@ -1,4 +1,5 @@
 import { useNavigate } from "react-router-dom";
+import { APP_NAME } from "../brand";
 
 const FOREST =
   "https://images.unsplash.com/photo-1441974231531-c6227db76b6e?auto=format&fit=crop&w=1600&q=80";
@@ -26,7 +27,7 @@ export function Home() {
             Restore what remains.
           </h1>
           <p className="lede">
-            Darukaa.Earth is an AI environmental scientist. It retrieves scientific evidence, reasons across soil,
+            {APP_NAME} is an AI environmental scientist. It retrieves scientific evidence, reasons across soil,
             water, habitat and climate together, and will not invent papers to fill the silence.
           </p>
           <div className="hero-actions">

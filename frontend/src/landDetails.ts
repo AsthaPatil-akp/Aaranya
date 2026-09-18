@@ -10,7 +10,7 @@ export type LandDetails = {
   soil_moisture: string;
   rainfall: string;
   temperature: string;
-  pollution: string;
+  pesticide_use: string;
   biodiversity_observations: string;
 };
 
@@ -26,7 +26,7 @@ export const EMPTY_LAND_DETAILS: LandDetails = {
   soil_moisture: "",
   rainfall: "",
   temperature: "",
-  pollution: "",
+  pesticide_use: "",
   biodiversity_observations: "",
 };
 
@@ -57,7 +57,7 @@ const CHIP_LABELS: Record<keyof LandDetails, string> = {
   soil_moisture: "Soil moisture",
   rainfall: "Rainfall",
   temperature: "Temperature",
-  pollution: "Pesticide use",
+  pesticide_use: "Pesticide use",
   biodiversity_observations: "Biodiversity",
 };
 
@@ -77,7 +77,7 @@ export function toStructuredPayload(details: LandDetails): Record<string, string
     "land_use",
     "soil_moisture",
     "rainfall",
-    "pollution",
+    "pesticide_use",
     "biodiversity_observations",
   ];
   for (const key of textFields) {

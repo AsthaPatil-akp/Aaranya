@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import re
 from app.core.config import get_settings
-from app.models.schemas import ClaimEvidenceLink, EvidenceItem, KnowledgeStatus
+from app.models.schemas import ClaimEvidenceLink, EnvironmentalContext, EvidenceItem, KnowledgeStatus
 from app.services.embeddings import get_embedder
 from app.services.fallback import wants_recent_literature
 
@@ -13,6 +13,8 @@ RESEARCH_INTENT = re.compile(
     re.I,
 )
 NUMERIC_RE = re.compile(r"\b\d+(?:\.\d+)?\s*%")
+TIME_SPAN_RE = re.compile(r"\b\d{1,2}\s*[–\-to]+\s*\d{1,2}\s+(?:years?|months?)\b", re.I)
+EXACT_TIME_RE = re.compile(r"\b\d+\s+(?:years?|months?|weeks?)\b", re.I)
 
 
 def kb_is_weak(accepted: list[EvidenceItem]) -> bool:
@@ -138,14 +140,45 @@ def verify_claims(
 
 
 DOI_RE = re.compile(r"10\.\d{4,}/[^\s\]\)]+")
+UNSUPPORTED_DISCLAIMER = (
+    "Some generated statements were not supported by the retrieved passages and should not be treated as verified."
+)
+_ROTATION_RE = re.compile(r"\b(?:crop\s+rotations?|diversified\s+rotations?|rotational\s+cropping)\b", re.I)
+_UNCERTAINTY_RE = re.compile(
+    r"does not (?:confirm|support|establish)|retrieved (?:passages|evidence) do not|"
+    r"\buncertain\b|was not provided|would help to know|ask(?:ed)? about|"
+    r"listed as none|not treated as (?:an )?existing|historical pesticide",
+    re.I,
+)
+_SOURCE_SPLIT_RE = re.compile(r"(?is)\n+\s*sources?\s*/?\s*evidence")
 
 
-def claims_from_answer(answer: str, evidence: list[EvidenceItem], limit: int = 6) -> list[ClaimEvidenceLink]:
+def _is_uncertainty_language(text: str) -> bool:
+    return bool(_UNCERTAINTY_RE.search(text or ""))
+
+
+def _is_moisture_crowding_claim(text: str) -> bool:
+    lower = (text or "").lower()
+    has_moisture = re.search(r"(?:high|elevated|excess(?:ive)?)\s+(?:soil\s+)?moisture", lower)
+    has_crowd = re.search(r"crowd|compet(?:e|ition)|densit", lower)
+    has_bio = re.search(r"biodivers|species|pollinator|\bplants?\b", lower)
+    return bool(has_moisture and has_crowd and has_bio)
+
+
+def _split_sentences(text: str) -> list[str]:
+    body = _SOURCE_SPLIT_RE.split(text or "", maxsplit=1)[0]
+    return [part.strip() for part in re.split(r"(?<=[.!?])\s+", body) if part.strip()]
+
+
+def claims_from_answer(answer: str, evidence: list[EvidenceItem], limit: int = 8) -> list[ClaimEvidenceLink]:
     text = (answer or "").strip()
     if not text:
         return []
-    body = re.split(r"(?is)\n+\s*sources?\s*/?\s*evidence", text, maxsplit=1)[0]
-    sentences = [part.strip() for part in re.split(r"(?<=[.!?])\s+", body) if len(part.strip()) >= 40]
+    sentences = [
+        sentence
+        for sentence in _split_sentences(text)
+        if len(sentence) >= 40 and not _is_uncertainty_language(sentence)
+    ]
     claims: list[ClaimEvidenceLink] = []
     for index, sentence in enumerate(sentences[:limit]):
         sent_tokens = _content_tokens(sentence)
@@ -167,16 +200,148 @@ def claims_from_answer(answer: str, evidence: list[EvidenceItem], limit: int = 6
     return claims
 
 
-def strip_unsupported_language(answer: str, claims: list[ClaimEvidenceLink]) -> str:
-    text = answer
+def _evidence_blob(evidence: list[EvidenceItem]) -> str:
+    return " ".join(
+        f"{item.passage or ''} {item.title or ''} {item.document_name or ''}" for item in evidence
+    ).lower()
+
+
+def _allowed_rotation(user_message: str, evidence: list[EvidenceItem]) -> bool:
+    blob = f"{user_message or ''} {_evidence_blob(evidence)}"
+    return bool(_ROTATION_RE.search(blob))
+
+
+def _uncertainty_rewrite(sentence: str) -> str:
+    lower = (sentence or "").lower()
+    if _ROTATION_RE.search(lower):
+        return ""
+    if _is_moisture_crowding_claim(sentence or ""):
+        return (
+            "The retrieved passages do not establish that high soil moisture reduces biodiversity "
+            "through plant crowding. Has waterlogging or unusually dense vegetation actually been observed?"
+        )
+    if re.search(r"\b(?:pesticide|insecticide|herbicide|agrochemical)s?\b", lower):
+        return ""
+    return ""
+
+
+def rewrite_unsupported_claims(answer: str, claims: list[ClaimEvidenceLink]) -> str:
+    """Remove or rewrite unsupported claims instead of showing them with a disclaimer."""
+    text = answer or ""
+    text = text.replace(UNSUPPORTED_DISCLAIMER, "")
     for claim in claims:
-        if claim.support == "unsupported" and claim.text and claim.text in text:
-            text = text.replace(claim.text, "")
-        if claim.support == "unsupported":
-            for num in NUMERIC_RE.findall(claim.text):
-                if num.lower() not in " ".join(claim.sources).lower():
-                    text = text.replace(num, "an unquantified change")
-    return re.sub(r"\n{3,}", "\n\n", text).strip()
+        if claim.support != "unsupported":
+            continue
+        original = (claim.text or "").strip()
+        if not original or _is_uncertainty_language(original):
+            continue
+        replacement = _uncertainty_rewrite(original)
+        pattern = re.escape(original)
+        if re.search(pattern, text):
+            text = re.sub(pattern, replacement, text, count=1)
+            continue
+        compact = re.sub(r"\s+", " ", original)
+        compact_text = re.sub(r"\s+", " ", text)
+        if compact in compact_text:
+            text = re.sub(re.escape(original[:80]), replacement, text, count=1)
+    return re.sub(r"[ \t]+\n", "\n", re.sub(r"\n{3,}", "\n\n", text)).strip()
+
+
+def strip_unsupported_language(answer: str, claims: list[ClaimEvidenceLink]) -> str:
+    return rewrite_unsupported_claims(answer, claims)
+
+
+def pesticide_use_is_none(context: EnvironmentalContext | None) -> bool:
+    if context is None:
+        return False
+    value = str(getattr(context.human_impact, "pesticide_use", None) or "").strip().lower()
+    return value in {"none", "no", "not used", "zero", "absent"}
+
+
+def apply_context_grounding_rules(
+    answer: str,
+    context: EnvironmentalContext | None,
+    evidence: list[EvidenceItem],
+    user_message: str = "",
+) -> str:
+    """Drop invented mechanisms that the retrieved evidence and user inputs do not support."""
+    text = answer or ""
+    sentences = re.split(r"(?<=[.!?])\s+", text)
+    allowed_rotation = _allowed_rotation(user_message, evidence)
+    if context is not None and context.land.land_use == "intercropping" and not re.search(
+        r"crop rotation|diversified rotation|rotational cropping", user_message or "", re.I
+    ):
+        allowed_rotation = False
+    evidence_text = _evidence_blob(evidence)
+    kept: list[str] = []
+    asked_history = False
+    for sentence in sentences:
+        raw = sentence.strip()
+        if not raw:
+            continue
+        if not allowed_rotation and _ROTATION_RE.search(raw):
+            continue
+        if _is_moisture_crowding_claim(raw) and not re.search(
+            r"crowd|compet(?:e|ition)|plant crowding", evidence_text
+        ):
+            if not any("plant crowding" in item.lower() for item in kept):
+                kept.append(
+                    "The retrieved passages do not establish that high soil moisture reduces biodiversity "
+                    "through plant crowding. Has waterlogging or unusually dense vegetation actually been observed?"
+                )
+            continue
+        if pesticide_use_is_none(context) and re.search(
+            r"\b(?:pesticide|insecticide|herbicide|agrochemical)s?\b", raw, re.I
+        ):
+            if _is_uncertainty_language(raw) and "historical" in raw.lower():
+                kept.append(raw)
+                asked_history = True
+            continue
+        kept.append(raw)
+    text = " ".join(kept).strip()
+    if (
+        pesticide_use_is_none(context)
+        and not asked_history
+        and context is not None
+        and (
+            (context.biodiversity.pollinator_diversity or "").lower() in {"declining", "low"}
+            or re.search(r"bees|butterfl|pollinator", user_message or "", re.I)
+        )
+        and "historical pesticide" not in text.lower()
+    ):
+        text = (
+            text.rstrip()
+            + " Current pesticide use is listed as none, so pesticide exposure should not be treated as an existing "
+            "pressure. If insecticides were used in earlier seasons, that history would help interpret insect "
+            "declines — was there historical pesticide use?"
+        )
+    return re.sub(r"[ \t]+\n", "\n", re.sub(r"\n{3,}", "\n\n", text)).strip()
+
+
+def ground_answer(
+    draft: str,
+    evidence: list[EvidenceItem],
+    *,
+    user_message: str = "",
+    context: EnvironmentalContext | None = None,
+    claims: list[ClaimEvidenceLink] | None = None,
+) -> tuple[str, list[ClaimEvidenceLink]]:
+    """LLM draft → claim/evidence validation → remove/rewrite unsupported claims → grounded answer."""
+    working = (draft or "").replace(UNSUPPORTED_DISCLAIMER, "").strip()
+    working_claims = claims or claims_from_answer(working, evidence)
+    working_claims = verify_claims(working_claims, evidence)
+    working = rewrite_unsupported_claims(working, working_claims)
+    working = sanitize_answer_against_evidence(working, evidence, user_message=user_message)
+    working = apply_context_grounding_rules(working, context, evidence, user_message)
+    working = working.replace(UNSUPPORTED_DISCLAIMER, "").strip()
+    final_claims = claims_from_answer(working, evidence)
+    final_claims = verify_claims(final_claims, evidence)
+    leftover = [claim for claim in final_claims if claim.support == "unsupported"]
+    if leftover:
+        working = rewrite_unsupported_claims(working, leftover)
+        final_claims = verify_claims(claims_from_answer(working, evidence), evidence)
+    working = re.sub(r"\n{3,}", "\n\n", working).strip()
+    return working, final_claims
 
 
 def sanitize_answer_against_evidence(
@@ -214,6 +379,9 @@ def sanitize_answer_against_evidence(
     for num in set(NUMERIC_RE.findall(text)):
         if num.lower() not in allowed:
             text = text.replace(num, "an unquantified change")
+    for span in set(TIME_SPAN_RE.findall(text) + EXACT_TIME_RE.findall(text)):
+        if span.lower() not in allowed:
+            text = text.replace(span, "no specific timeframe supported by the retrieved evidence")
     return re.sub(r"[ \t]+\n", "\n", re.sub(r"\n{3,}", "\n\n", text)).strip()
 
 

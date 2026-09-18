@@ -32,7 +32,8 @@ def test_extracts_pesticides_flowering_and_temperature_range():
     assert found["temperature"] == 30.0
     assert found["plant_diversity"] == "low"
     assert found["pollinator_diversity"] == "declining"
-    assert found["pollution"] == "pesticide use"
+    assert found["pesticide_use"] == "pesticide use"
+    assert "pollution" not in found
     found = extract_from_text(
         "My farm is 5 acres. There are fewer bees and butterflies. Water availability is poor."
     )
@@ -71,4 +72,16 @@ def test_skips_extraction_for_simple_followup():
         "My farm is 5 acres in a semi-arid region with wheat monoculture and soil carbon 0.3%.",
         EnvironmentalContext(),
     ) is True
+
+
+def test_pesticide_none_is_not_mapped_to_pollution():
+    found = extract_from_text("Pesticide use is none on this wheat farm.")
+    assert found["pesticide_use"] == "none"
+    assert "pollution" not in found
+    ctx = apply_updates(EnvironmentalContext(), {"pesticide_use": "none", "crop": "wheat"})
+    assert ctx.human_impact.pesticide_use == "none"
+    assert ctx.human_impact.pollution is None
+    ctx = apply_updates(EnvironmentalContext(), {"pollution": "none"})
+    assert ctx.human_impact.pesticide_use == "none"
+    assert ctx.human_impact.pollution is None
 

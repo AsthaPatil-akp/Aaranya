@@ -159,8 +159,24 @@ def extract_from_text(message: str) -> dict[str, Any]:
     elif re.search(r"\b(high|severe|heavy|moderate|low)\s+pollution\b", text, re.I):
         match = re.search(r"\b(high|severe|heavy|moderate|low)\s+pollution\b", text, re.I)
         found["pollution"] = _qual(match.group(1)) if match else None
+
+    none_pesticide = re.search(
+        r"(?:pesticide(?:s|_use)?(?:\s+use)?(?:\s+is|\s*=|:)?\s*(?:none|not used|no)|"
+        r"(?:no|without|not using|do not use)\s+(?:pesticides?|insecticides?|herbicides?|agrochemicals?))",
+        text,
+        re.I,
+    )
+    pesticide_level = re.search(
+        r"\b(low|moderate|medium|high|severe)\s+(?:pesticide|insecticide|herbicide|agrochemical)\b",
+        text,
+        re.I,
+    )
+    if none_pesticide:
+        found["pesticide_use"] = "none"
+    elif pesticide_level:
+        found["pesticide_use"] = _qual(pesticide_level.group(1)) or pesticide_level.group(1).lower()
     elif re.search(r"\b(pesticides?|insecticides?|herbicides?|agrochemicals?)\b", text, re.I):
-        found["pollution"] = "pesticide use"
+        found["pesticide_use"] = "pesticide use"
 
     if re.search(r"\bdeforestation\b", text, re.I):
         found["deforestation"] = "present"
@@ -249,9 +265,20 @@ def structured_to_dict(data: StructuredInput) -> dict[str, Any]:
     return {k: v for k, v in data.model_dump().items() if v is not None}
 
 
+def normalize_structured_updates(updates: dict[str, Any]) -> dict[str, Any]:
+    """Keep pesticide_use and pollution as separate variables."""
+    data = dict(updates)
+    pollution = str(data.get("pollution") or "").strip().lower()
+    if "pesticide_use" not in data and pollution in {"none", "pesticide use"}:
+        data["pesticide_use"] = pollution
+        data.pop("pollution", None)
+    return data
+
+
 def apply_updates(context: EnvironmentalContext, updates: dict[str, Any], overwrite: bool = False) -> EnvironmentalContext:
     """Merge new values. Do not overwrite existing valid values unless overwrite=True."""
     ctx = context.model_copy(deep=True)
+    updates = normalize_structured_updates(updates)
 
     def set_if(obj: Any, field: str, key: str) -> None:
         if key not in updates:
@@ -292,6 +319,7 @@ def apply_updates(context: EnvironmentalContext, updates: dict[str, Any], overwr
     set_if(ctx.climate, "water_availability", "water_availability")
     set_if(ctx.climate, "climate_stress", "climate_stress")
     set_if(ctx.human_impact, "pollution", "pollution")
+    set_if(ctx.human_impact, "pesticide_use", "pesticide_use")
     set_if(ctx.human_impact, "deforestation", "deforestation")
     set_if(ctx.human_impact, "land_degradation", "land_degradation")
     set_if(ctx.human_impact, "habitat_destruction", "habitat_destruction")

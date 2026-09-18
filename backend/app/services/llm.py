@@ -15,6 +15,7 @@ from app.models.schemas import (
     EvidenceItem,
     ImpactedMetric,
     RecommendationBlock,
+    RecommendationItem,
     TimeHorizon,
 )
 from app.services.prompting import (
@@ -23,11 +24,13 @@ from app.services.prompting import (
     answer_length_band,
     build_expansion_prompt,
     build_user_prompt,
+    complete_recommendation,
     compose_user_facing_answer,
     dedupe_recommendations,
     ensure_grounded_sources,
     ensure_material_variables,
     filter_evidence_for_answer,
+    mechanism_allowed,
     needs_answer_expansion,
     predict_budget,
     sanitize_time_horizon,
@@ -284,9 +287,17 @@ class RecordingLLM:
             if self.responder:
                 return self.responder(system, user)
             return (
-                "Given the conditions you described, I would focus on rebuilding soil cover and "
-                "habitat diversity without adding heavy water demand. Low soil carbon and low rainfall "
-                "can interact, and simplified land use may reduce floral resources for pollinators."
+                "Based on the conditions you described, several factors may be interacting. "
+                "Low soil carbon and low rainfall can interact, and simplified wheat land use may reduce floral resources for pollinators. "
+                "Drought-tolerant cover crops and residue can help rebuild soil function where rainfall is low. "
+                "Widely spaced native shrubs can add habitat without a dense plantation. "
+                "Impacted metrics these changes could affect: soil organic carbon; soil moisture; habitat diversity; pollinators. "
+                "These metrics are potentially affected rather than guaranteed to improve. "
+                "No specific timeframe is supported by the retrieved evidence beyond a gradual, multi-year soil response. "
+                "Sources / Evidence\n"
+                "- Soil Organic Carbon, Soil pH, Moisture and Below-Ground Biodiversity\n"
+                "- Cover Crops, Residue Retention and Water-Holding Capacity in Semi-Arid Farming\n"
+                "- Monoculture, Agroforestry and Habitat Complexity"
             )
         if self.responder:
             return self.responder(system, user)
@@ -306,6 +317,20 @@ class RecordingLLM:
             "recommendation": "Use drought-tolerant cover crops in the fallow window and native shrubs on field edges where water allows.",
             "why_it_works": "Low soil carbon and low rainfall interact: soils hold less water and living roots are scarce, which also reduces habitat for insects.",
             "environmental_relationships": "Organic carbon, rainfall and land use act together rather than as separate problems.",
+            "recommendations": [
+                {
+                    "action": "Use drought-tolerant cover crops in the fallow window.",
+                    "why": "Low soil carbon and low rainfall interact: soils hold less water and living roots are scarce.",
+                    "metrics": ["Soil organic carbon", "Soil moisture"],
+                    "evidence_ids": ids,
+                },
+                {
+                    "action": "Plant native shrubs on field edges where water allows.",
+                    "why": "Simplified land use may reduce floral resources for pollinators.",
+                    "metrics": ["Pollinator diversity", "Habitat diversity"],
+                    "evidence_ids": ids,
+                },
+            ],
             "impacted_metrics": [
                 {"name": "Soil organic carbon", "direction": "up", "note": "gradual if residue is kept"},
                 {"name": "Soil moisture", "direction": "up", "note": None},
@@ -649,16 +674,33 @@ def generate_recommendation(
             if part and not any(part.lower() in str(existing.get("action")).lower() for existing in parsed_recs):
                 parsed_recs.insert(0, {"action": part, "why": str(data.get("why_it_works") or ""), "metrics": [], "evidence_ids": []})
     parsed_recs = dedupe_recommendations(parsed_recs)
+    parsed_recs = [
+        item
+        for item in parsed_recs
+        if mechanism_allowed(str(item.get("action") or ""), kb_evidence + external_evidence, context, message)
+    ]
     data["recommendations"] = parsed_recs
     extra_actions = [str(item.get("action") or "").strip() for item in parsed_recs if item.get("action")]
     extra_whys = [str(item.get("why") or "").strip() for item in parsed_recs if item.get("why")]
     rec_ids: list[str] = []
+    rec_items: list[RecommendationItem] = []
     for item in parsed_recs:
         rec_ids.extend(str(eid) for eid in (item.get("evidence_ids") or []))
+        item_metrics: list[ImpactedMetric] = []
         for metric_name in item.get("metrics") or []:
             name = str(metric_name).strip()
-            if name and all(existing.name.lower() != name.lower() for existing in metrics):
+            if not name:
+                continue
+            item_metrics.append(ImpactedMetric(name=name, direction="unknown", note="potentially affected"))
+            if all(existing.name.lower() != name.lower() for existing in metrics):
                 metrics.append(ImpactedMetric(name=name, direction="unknown"))
+        rec_items.append(
+            RecommendationItem(
+                action=str(item.get("action") or "").strip(),
+                why=str(item.get("why") or "").strip(),
+                impacted_metrics=item_metrics,
+            )
+        )
     rec = "; ".join(extra_actions) if extra_actions else rec
     why = str(data.get("why_it_works") or "").strip()
     if not why and extra_whys:
@@ -674,6 +716,7 @@ def generate_recommendation(
         uncertainty=None if data.get("uncertainty") is None else str(data.get("uncertainty")),
         confidence=_coerce_confidence(data.get("confidence")),
         confidence_rationale=str(data.get("confidence_rationale") or ""),
+        items=rec_items,
     )
     composed = ensure_grounded_sources(
         compose_user_facing_answer(
@@ -715,6 +758,13 @@ def generate_recommendation(
     composed = ensure_material_variables(composed, context)
     used_kb, used_ext = filter_evidence_for_answer(composed, claims, rec_ids, kb_evidence, external_evidence)
     composed = ensure_grounded_sources(composed, used_kb, used_ext)
+    block = complete_recommendation(
+        block,
+        composed,
+        context,
+        [*used_kb, *used_ext],
+        user_message=message,
+    )
     data["_claims"] = [c.model_dump() for c in claims]
     data["_answer"] = composed or str(data.get("answer") or block.action)
     data["_raw"] = raw
