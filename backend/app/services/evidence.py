@@ -4,6 +4,7 @@ import re
 from app.core.config import get_settings
 from app.models.schemas import ClaimEvidenceLink, EnvironmentalContext, EvidenceItem, KnowledgeStatus
 from app.services.fallback import wants_recent_literature
+from app.services.prompting import is_conceptual_question
 
 RESEARCH_INTENT = re.compile(
     r"\b(latest|recent studies|new findings|current evidence|peer[- ]reviewed|"
@@ -24,13 +25,19 @@ def kb_is_weak(accepted: list[EvidenceItem]) -> bool:
     return best < settings.weak_kb_threshold
 
 
+def message_requests_external_search(message: str) -> bool:
+    return bool(RESEARCH_INTENT.search(message or "") or wants_recent_literature(message))
+
+
 def should_search_external(
     message: str,
     accepted: list[EvidenceItem],
     rejected: list[EvidenceItem],
 ) -> tuple[bool, str]:
-    if RESEARCH_INTENT.search(message or "") or wants_recent_literature(message):
+    if message_requests_external_search(message):
         return True, "user_requested_research_or_recency"
+    if is_conceptual_question(message) and accepted:
+        return False, "conceptual_followup_kb_context"
     if not accepted:
         return True, "kb_insufficient"
     if kb_is_weak(accepted):

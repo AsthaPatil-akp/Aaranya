@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 import json
 import logging
@@ -24,6 +25,7 @@ from app.models.schemas import (
 from app.services.evidence import (
     STATUS_LABELS,
     ground_answer,
+    message_requests_external_search,
     select_evidence,
     should_search_external,
     status_from_evidence,
@@ -231,17 +233,10 @@ def _apply_grounding(
     rec: RecommendationBlock | None = None,
     claims: list[ClaimEvidenceLink] | None = None,
 ) -> tuple[str, list[ClaimEvidenceLink], RecommendationBlock, list[EvidenceItem], list[EvidenceItem]]:
+    if not is_conceptual_question(prepared.message):
+        draft = ensure_material_variables(draft, prepared.context)
     answer, claims = ground_answer(
         draft,
-        prepared.selected,
-        user_message=prepared.message,
-        context=prepared.context,
-        claims=claims,
-    )
-    if not is_conceptual_question(prepared.message):
-        answer = ensure_material_variables(answer, prepared.context)
-    answer, claims = ground_answer(
-        answer,
         prepared.selected,
         user_message=prepared.message,
         context=prepared.context,
@@ -385,22 +380,44 @@ def prepare_chat(payload: ChatRequest) -> PreparedChat:
         )
 
     query = retrieval_query(message, context, include_context=True)
+    env_blob = " ".join(f"{k} {v}" for k, v in context.known_variables().items())
+    prefer_recent = wants_recent_literature(message)
     t_chroma = time.perf_counter()
-    retrieved = retriever.search(query)
-    accepted, rejected = retriever.split_relevant(retrieved)
-    timings["chroma_retrieval_ms"] = _ms(t_chroma)
-
-    need_external, external_reason = should_search_external(message, accepted, rejected)
-    external: list[EvidenceItem] = []
     t_oa = time.perf_counter()
-    if need_external:
-        env_blob = " ".join(f"{k} {v}" for k, v in context.known_variables().items())
-        external = search_openalex(
-            f"{message} {query}",
-            environmental_context=env_blob,
-            prefer_recent=wants_recent_literature(message),
-        )
-    timings["openalex_ms"] = _ms(t_oa) if need_external else 0.0
+    retrieved: list[EvidenceItem]
+    external: list[EvidenceItem] = []
+    if message_requests_external_search(message) and settings.enable_openalex:
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            kb_future = pool.submit(retriever.search, query)
+            oa_future = pool.submit(
+                search_openalex,
+                f"{message} {query}",
+                environmental_context=env_blob,
+                prefer_recent=prefer_recent,
+            )
+            retrieved = kb_future.result()
+            timings["chroma_retrieval_ms"] = _ms(t_chroma)
+            accepted, rejected = retriever.split_relevant(retrieved)
+            need_external, external_reason = should_search_external(message, accepted, rejected)
+            if need_external:
+                external = oa_future.result()
+                timings["openalex_ms"] = _ms(t_oa)
+            else:
+                timings["openalex_ms"] = 0.0
+    else:
+        retrieved = retriever.search(query)
+        timings["chroma_retrieval_ms"] = _ms(t_chroma)
+        accepted, rejected = retriever.split_relevant(retrieved)
+        need_external, external_reason = should_search_external(message, accepted, rejected)
+        if need_external:
+            external = search_openalex(
+                f"{message} {query}",
+                environmental_context=env_blob,
+                prefer_recent=prefer_recent,
+            )
+            timings["openalex_ms"] = _ms(t_oa)
+        else:
+            timings["openalex_ms"] = 0.0
 
     t_sel = time.perf_counter()
     selected = select_evidence(accepted, external)

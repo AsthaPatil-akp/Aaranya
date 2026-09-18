@@ -54,3 +54,19 @@ def test_external_triggered_for_research_request():
     needed, reason = should_search_external("Please find recent studies on cover crops", strong, [])
     assert needed is True
     assert "research" in reason or "recency" in reason
+
+
+def test_conceptual_followup_skips_openalex_when_kb_accepted():
+    strong = [
+        EvidenceItem(
+            evidence_id="kb-1",
+            source="a.md",
+            document_name="a.md",
+            passage="agroforestry trees crops",
+            relevance_score=0.9,
+            origin="knowledge_base",
+        )
+    ]
+    needed, reason = should_search_external("What is agroforestry?", strong, [])
+    assert needed is False
+    assert "conceptual" in reason

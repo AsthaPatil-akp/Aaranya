@@ -249,6 +249,12 @@ class OpenAICompatibleProvider:
     def _headers(self) -> dict[str, str]:
         return {"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"}
 
+    def _http(self) -> httpx.Client:
+        client = getattr(self, "_client", None)
+        if client is None:
+            self._client = httpx.Client(timeout=90.0)
+        return self._client
+
     def _payload(
         self,
         system: str,
@@ -257,6 +263,7 @@ class OpenAICompatibleProvider:
         json_mode: bool,
         temperature: float,
         stream: bool,
+        num_predict: int | None = None,
     ) -> dict[str, Any]:
         payload: dict[str, Any] = {
             "model": self.model,
@@ -269,6 +276,8 @@ class OpenAICompatibleProvider:
         }
         if json_mode:
             payload["response_format"] = {"type": "json_object"}
+        if num_predict:
+            payload["max_tokens"] = int(num_predict)
         return payload
 
     def complete(
@@ -278,10 +287,10 @@ class OpenAICompatibleProvider:
         *,
         json_mode: bool = True,
         temperature: float = 0.2,
-        **_kwargs: Any,
+        **kwargs: Any,
     ) -> str:
         try:
-            response = httpx.post(
+            response = self._http().post(
                 f"{self.base_url}/chat/completions",
                 headers=self._headers(),
                 json=self._payload(
@@ -290,8 +299,8 @@ class OpenAICompatibleProvider:
                     json_mode=json_mode,
                     temperature=temperature,
                     stream=False,
+                    num_predict=kwargs.get("num_predict"),
                 ),
-                timeout=90.0,
             )
         except httpx.HTTPError as exc:
             raise LLMUnavailable(f"The {self.label} provider could not be reached.") from exc
@@ -306,10 +315,10 @@ class OpenAICompatibleProvider:
         *,
         json_mode: bool = False,
         temperature: float = 0.3,
-        **_kwargs: Any,
+        **kwargs: Any,
     ):
         try:
-            with httpx.stream(
+            with self._http().stream(
                 "POST",
                 f"{self.base_url}/chat/completions",
                 headers=self._headers(),
@@ -319,8 +328,8 @@ class OpenAICompatibleProvider:
                     json_mode=json_mode,
                     temperature=temperature,
                     stream=True,
+                    num_predict=kwargs.get("num_predict"),
                 ),
-                timeout=90.0,
             ) as response:
                 if response.status_code >= 400:
                     response.read()

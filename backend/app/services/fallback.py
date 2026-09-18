@@ -274,7 +274,7 @@ def search_openalex(
         )
     prelim.sort(key=lambda item: item["score"], reverse=True)
     shortlist = prelim[: max(keep, 3)]
-    if settings.fetch_open_access_text:
+    if settings.fetch_open_access_text and prefer_recent:
         for item in shortlist[:2]:
             oa_url = item.get("oa_url")
             if not oa_url:

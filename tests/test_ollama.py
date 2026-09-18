@@ -12,6 +12,7 @@ from app.services.llm import (
     LLMUnavailable,
     OllamaClient,
     OllamaProvider,
+    OpenAICompatibleProvider,
     OpenAIProvider,
     GroqProvider,
     _coerce_confidence,
@@ -124,6 +125,26 @@ def test_groq_selected_when_key_present(monkeypatch, real_ollama_client):
     assert llm_is_configured() is True
     assert llm_is_available() is True
     assert configured_llm_model() == "llama-3.1-8b-instant"
+
+
+def test_openai_compatible_payload_caps_max_tokens():
+    client = OpenAICompatibleProvider(
+        model="llama-3.1-8b-instant",
+        api_key="test",
+        base_url="https://example.com/v1",
+        label="Test",
+        provider="test",
+    )
+    payload = client._payload(
+        "sys",
+        "user",
+        json_mode=False,
+        temperature=0.35,
+        stream=True,
+        num_predict=400,
+    )
+    assert payload["max_tokens"] == 400
+    assert payload["stream"] is True
 
 
 def test_extract_json_salvages_plain_text():
