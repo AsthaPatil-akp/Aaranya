@@ -189,14 +189,24 @@ function metricCell(metrics: ActionPlanMetric[]): string {
 export function recommendationTableFromItems(items: ActionPlanRecommendation[]): MarkdownTable | null {
   if (!items.length) return null;
   return {
-    headers: ["Action", "Why it may help", "Impacted metrics", "Time horizon", "Supporting evidence"],
-    rows: items.map((item) => [
-      hideInternalEvidenceIds(item.action),
-      hideInternalEvidenceIds(item.why),
-      hideInternalEvidenceIds(metricCell(item.metrics)),
-      hideInternalEvidenceIds(item.timeHorizon),
-      hideInternalEvidenceIds(item.sources.join("; ")),
-    ]),
+    headers: [
+      "Intervention",
+      "What to do",
+      "Why it may help",
+      "Potentially affected metrics",
+      "Time horizon",
+    ],
+    rows: items.map((item) => {
+      const action = hideInternalEvidenceIds(item.action);
+      const firstClause = action.split(/[.]/, 1)[0].trim();
+      return [
+        firstClause && firstClause.length <= 48 ? firstClause : action,
+        action,
+        hideInternalEvidenceIds(item.why),
+        hideInternalEvidenceIds(metricCell(item.metrics)),
+        hideInternalEvidenceIds(item.timeHorizon),
+      ];
+    }),
   };
 }
 

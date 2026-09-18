@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { buildActionPlan } from "./actionPlan";
-import { renderActionPlanPdf } from "./actionPlanPdf";
+import { extractPdfText, renderActionPlanPdf } from "./actionPlanPdf";
 import { ChatResponse } from "./api";
 import { PDF_HEADING } from "./brand";
 import { EMPTY_LAND_DETAILS, LandDetails } from "./landDetails";
@@ -238,9 +238,121 @@ describe("action plan PDF data", () => {
         EMPTY_LAND_DETAILS,
       ),
     );
-    const text = new TextDecoder("latin1").decode(doc.output("arraybuffer"));
+    const text = extractPdfText(doc);
     expect(text).not.toMatch(/\|\s*Action\s*\|/);
     expect(text).not.toMatch(/kb-14/);
     expect(text).toContain("Keep residue");
+  });
+
+  it("renders a full action-plan sample without raw markdown or letter-spacing", () => {
+    const assistantMessage = `## Assessment Summary
+
+Your 5 acre wheat field in a semi-arid region has low soil organic carbon and low soil moisture. Drought-tolerant cover is a better fit than dense planting.
+
+## What to investigate first
+
+1. **Measure SOC** - Determine whether SOC is low, moderate, or high. A quick test will confirm whether carbon levels are low and how quickly the soil dries.
+
+2. **Map current intercropping patterns.** Identify companion species, drought tolerance, and flowering strips.
+
+3. **Assess residue retention.** Determine how much crop residue remains after harvest.
+
+## Recommendations
+
+| Intervention | What to do | Why it may help | Metrics |
+|---|---|---|---|
+| Cover crops | Plant a drought-tolerant cover crop | Adds organic matter and living roots | SOC, soil moisture |
+| Agroforestry | Add widely spaced trees/shrubs | Provides habitat and wind protection | SOC, habitat |
+| Flowering strips | Add flowering plants | Provides pollinator resources | Pollinator activity |
+
+## Why these work together
+
+Cover, trees and flowers address soil carbon, habitat and pollinators together rather than as isolated fixes.
+
+## Next steps
+
+1. Start with a small cover-crop strip.
+2. Keep residue on the soil surface.
+3. Review results after a season.
+
+## Sources / Evidence
+
+- Cover Crops, Residue Retention and Water-Holding Capacity in Semi-Arid Farming
+
+## Uncertainty
+
+Local trials are still needed before promising a specific yield or species response.
+`;
+    const doc = renderActionPlanPdf(
+      buildActionPlan(
+        {
+          ...baseResponse,
+          mode: "recommendation",
+          assistant_message: assistantMessage,
+          known_variables: { crop: "wheat", farm_size: "5 acres" },
+          recommendation: {
+            action: "Plant a drought-tolerant cover crop.",
+            why_it_works: "Adds organic matter and living roots.",
+            environmental_relationships: "Cover, trees and flowers address soil carbon together.",
+            impacted_metrics: [{ name: "Soil organic carbon", direction: "unknown", note: "potentially affected" }],
+            time_horizon: { narrative: "Several seasons to multiple years", evidence_supported: true },
+            uncertainty: "Local trials are still needed before promising a specific yield or species response.",
+            confidence: "medium",
+            confidence_rationale: "Retrieved passages were available.",
+            items: [
+              {
+                action: "Plant a drought-tolerant cover crop.",
+                why: "Adds organic matter and living roots.",
+                impacted_metrics: [{ name: "Soil organic carbon", direction: "unknown", note: "potentially affected" }],
+                time_horizon: "Several seasons to multiple years",
+                supporting_evidence: ["Cover Crops, Residue Retention and Water-Holding Capacity in Semi-Arid Farming"],
+              },
+            ],
+          },
+          kb_evidence: [
+            {
+              source: "02.md",
+              document_name: "02.md",
+              title: "Cover Crops, Residue Retention and Water-Holding Capacity in Semi-Arid Farming",
+              page: null,
+              topic: null,
+              document_type: null,
+              passage: "Cover crops and residue can support water holding.",
+              relevance_score: 0.8,
+              origin: "knowledge_base",
+            },
+          ],
+        },
+        { ...EMPTY_LAND_DETAILS, crop: "wheat", farm_size: "5 acres" },
+      ),
+    );
+    const text = extractPdfText(doc);
+    expect(text).toContain("AARANYA");
+    expect(text).toContain("1. Site Profile");
+    expect(text).toContain("2. Assessment Summary");
+    expect(text).toContain("3. What to investigate first");
+    expect(text).toContain("4. Recommendations");
+    expect(text).toContain("5. Why these work together");
+    expect(text).toContain("6. Next steps");
+    expect(text).toContain("7. Sources / Evidence");
+    expect(text).toContain("8. Monitoring Checklist");
+    expect(text).toContain("9. Uncertainty");
+    expect(text).toContain("Your 5 acre wheat field");
+    expect(text).toContain("Drought-tolerant cover");
+    expect(text).not.toMatch(/Y o u r 5 a c r e/);
+    expect(text).not.toMatch(/D r o u g h t/);
+    expect(text).not.toMatch(/## /);
+    expect(text).not.toContain("**");
+    expect(text).not.toMatch(/\|---/);
+    expect(text).not.toMatch(/\|\s*Intervention\s*\|/);
+    expect(text).toContain("Measure SOC");
+    expect(text).toContain("Cover crops");
+    expect(text).toContain("Intervention");
+    expect(text).toContain("What to do");
+    expect(text).toContain("Potentially affected metrics");
+    expect(text).toContain("Time horizon");
+    expect((text.match(/4\. Recommendations/g) || []).length).toBe(1);
+    expect((text.match(/7\. Sources \/ Evidence/g) || []).length).toBe(1);
+    expect((text.match(/9\. Uncertainty/g) || []).length).toBe(1);
   });
 });
