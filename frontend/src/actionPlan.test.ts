@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { buildActionPlan } from "./actionPlan";
-import { extractPdfText, renderActionPlanPdf } from "./actionPlanPdf";
+import { buildActionPlan, planSections } from "./actionPlan";
+import { extractPdfCharSpaces, extractPdfText, renderActionPlanPdf } from "./actionPlanPdf";
 import { ChatResponse } from "./api";
 import { PDF_HEADING } from "./brand";
 import { EMPTY_LAND_DETAILS, LandDetails } from "./landDetails";
@@ -354,5 +354,78 @@ Local trials are still needed before promising a specific yield or species respo
     expect((text.match(/4\. Recommendations/g) || []).length).toBe(1);
     expect((text.match(/7\. Sources \/ Evidence/g) || []).length).toBe(1);
     expect((text.match(/9\. Uncertainty/g) || []).length).toBe(1);
+    expect(extractPdfCharSpaces(doc).every((value) => value === 0)).toBe(true);
+  });
+
+  it("normalizes inline ATX headings and keeps normal character spacing", () => {
+    const assistantMessage = [
+      "Your 5 acre wheat field sits in a semi-arid zone with low, irregular rainfall. The soil dries quickly, suggesting limited water holding capacity. ## What to investigate first",
+      "1. **Measure soil organic carbon**: A baseline SOC value will tell you how much carbon input is needed.",
+      "2. **Monitor soil moisture dynamics**: Install a simple moisture probe.",
+      "3. **Assess current cover crop or residue presence**: Determine whether living cover exists.",
+      "",
+      "## Recommendations",
+      "| Intervention | What to do | Why it may help | Metrics | Time |",
+      "|---|---|---|---|---|",
+      "| Cover crops | Plant a drought-tolerant cover crop | Adds organic matter and living roots | SOC, soil moisture | Several seasons |",
+    ].join("\n");
+    const sections = planSections({ ...baseResponse, assistant_message: assistantMessage });
+    expect(sections.assessment_summary).toContain("Your 5 acre wheat field sits in a semi-arid zone");
+    expect(sections.assessment_summary).not.toContain("##");
+    expect(sections.assessment_summary).not.toContain("What to investigate first");
+    expect(sections.investigate_first).toContain("Measure soil organic carbon");
+    expect(sections.investigate_first).not.toContain("##");
+
+    const doc = renderActionPlanPdf(
+      buildActionPlan(
+        {
+          ...baseResponse,
+          mode: "recommendation",
+          assistant_message: assistantMessage,
+          recommendation: {
+            action: "Plant a drought-tolerant cover crop.",
+            why_it_works: "Adds organic matter and living roots.",
+            environmental_relationships: "Cover crops can support soil carbon.",
+            impacted_metrics: [{ name: "Soil organic carbon", direction: "unknown", note: "potentially affected" }],
+            time_horizon: { narrative: "Several seasons to multiple years", evidence_supported: true },
+            uncertainty: "Local trials are still needed.",
+            confidence: "medium",
+            confidence_rationale: "Retrieved passages were available.",
+            items: [
+              {
+                action: "Plant a drought-tolerant cover crop.",
+                why: "Adds organic matter and living roots.",
+                impacted_metrics: [{ name: "Soil organic carbon", direction: "unknown", note: "potentially affected" }],
+                time_horizon: "Several seasons to multiple years",
+                supporting_evidence: ["Cover Crops, Residue Retention and Water-Holding Capacity in Semi-Arid Farming"],
+              },
+            ],
+          },
+        },
+        { ...EMPTY_LAND_DETAILS, crop: "wheat", farm_size: "5 acres" },
+      ),
+    );
+    const text = extractPdfText(doc);
+    expect(text).toContain("2. Assessment Summary");
+    expect(text).toContain("Your 5 acre wheat field sits in a semi-arid zone with low, irregular rainfall.");
+    expect(text).toContain("What to investigate first");
+    expect(text).toContain("Measure soil organic carbon");
+    expect(text).toContain("A baseline SOC value will tell you how much carbon input is needed.");
+    expect(text).toContain("Monitor soil moisture dynamics");
+    expect(text).toContain("Install a simple moisture probe.");
+    expect(text).toContain("Assess current cover crop or residue presence");
+    expect(text).toContain("Determine whether living cover exists.");
+    expect(text).toContain("Intervention");
+    expect(text).toContain("What to do");
+    expect(text).toContain("Cover crops");
+    expect(text).toContain("drought-tolerant cover crop");
+    expect(text).not.toMatch(/Y o u r/);
+    expect(text).not.toMatch(/D r o u g h t/);
+    expect(text).not.toContain("##");
+    expect(text).not.toContain("###");
+    expect(text).not.toContain("**");
+    expect(text).not.toMatch(/\|---/);
+    expect(text).not.toMatch(/\|\s*Intervention\s*\|/);
+    expect(extractPdfCharSpaces(doc).every((value) => value === 0)).toBe(true);
   });
 });

@@ -7,6 +7,7 @@ export type PdfListItem = {
 
 export type PdfBlock =
   | { type: "paragraph"; text: string }
+  | { type: "heading"; text: string }
   | { type: "ordered-list"; items: PdfListItem[] }
   | { type: "unordered-list"; items: string[] };
 
@@ -21,6 +22,18 @@ export function normalizePdfText(text: string): string {
     .replace(/[‘’]/g, "'")
     .replace(/[–—]/g, "-")
     .replace(/\r\n/g, "\n");
+}
+
+/**
+ * Break ATX headings that appear after other text on the same line.
+ * Requires whitespace before the hashes and a space after them so URL fragments
+ * (`example.com/path#section`) and tokens like `C#` are left alone.
+ */
+export function splitInlineAtxHeadings(text: string): string {
+  return String(text || "").replace(
+    /([^\s#])([ \t]+)(#{1,6})[ \t]+(?=[^\s#])/g,
+    "$1\n\n$3 ",
+  );
 }
 
 export function stripMarkdownSyntax(text: string): string {
@@ -84,7 +97,9 @@ function splitRunOnOrdered(text: string): string[] {
 }
 
 export function parsePdfBlocks(markdown: string): PdfBlock[] {
-  const withoutTables = stripMarkdownTables(normalizePdfText(hideInternalEvidenceIds(markdown || "")));
+  const withoutTables = stripMarkdownTables(
+    splitInlineAtxHeadings(normalizePdfText(hideInternalEvidenceIds(markdown || ""))),
+  );
   const lines = withoutTables.split("\n");
   const blocks: PdfBlock[] = [];
   let paragraph: string[] = [];
@@ -108,6 +123,15 @@ export function parsePdfBlocks(markdown: string): PdfBlock[] {
     if (!line) {
       flushParagraph(paragraph, blocks);
       previousBlank = true;
+      continue;
+    }
+    const atx = line.match(/^(#{1,6})\s+(.+)$/);
+    if (atx) {
+      flushParagraph(paragraph, blocks);
+      flushLists();
+      previousBlank = false;
+      const headingText = stripMarkdownSyntax(atx[2]);
+      if (headingText) blocks.push({ type: "heading", text: headingText });
       continue;
     }
     if (isDuplicateHeadingLine(line)) {

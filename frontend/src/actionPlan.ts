@@ -7,6 +7,7 @@ import {
   parseMarkdownTables,
   MarkdownTable,
 } from "./markdown";
+import { normalizePdfText, splitInlineAtxHeadings } from "./pdfMarkdown";
 
 export type ActionPlanMetric = { name: string; direction: string; note?: string | null };
 
@@ -210,8 +211,14 @@ export function recommendationTableFromItems(items: ActionPlanRecommendation[]):
   };
 }
 
+function pdfSourceText(response: ChatResponse): string {
+  return splitInlineAtxHeadings(
+    normalizePdfText(hideInternalEvidenceIds((response.assistant_message || "").trim())),
+  );
+}
+
 export function groundedAssessment(response: ChatResponse): string {
-  const text = hideInternalEvidenceIds((response.assistant_message || "").trim());
+  const text = pdfSourceText(response);
   if (!text) return "";
   const sections = extractAnswerSections(text);
   if (sections.assessment_summary) return sections.assessment_summary;
@@ -219,8 +226,7 @@ export function groundedAssessment(response: ChatResponse): string {
 }
 
 export function planSections(response: ChatResponse) {
-  const text = hideInternalEvidenceIds((response.assistant_message || "").trim());
-  return extractAnswerSections(text);
+  return extractAnswerSections(pdfSourceText(response));
 }
 
 export function recommendationTableForPlan(

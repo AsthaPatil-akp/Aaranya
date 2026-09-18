@@ -34,13 +34,23 @@ function wrap(doc: jsPDF, text: string, width = CONTENT_W): string[] {
   const source = normalizePdfText(String(text || "")).replace(/[ \t]+/g, " ").trim();
   if (!source) return [];
   const wrapped = doc.splitTextToSize(source, Math.max(20, width));
-  return asLines(wrapped).filter((line) => line.length > 0);
+  return asLines(wrapped)
+    .map((line) => normalizePdfText(String(line)))
+    .filter((line) => line.length > 0);
+}
+
+function resetTextState(doc: jsPDF) {
+  // jsPDF's text() uses `options.charSpace || currentCharSpace`. Passing
+  // `{ charSpace: 0 }` is falsy and re-applies a leaked Tc value. Reset the
+  // instance state instead, and never put charSpace on text() options.
+  doc.setCharSpace(0);
 }
 
 function writeLine(doc: jsPDF, text: string, x: number, y: number) {
   const line = normalizePdfText(String(text ?? ""));
   if (!line) return;
-  doc.text(line, x, y, { align: "left", charSpace: 0, renderingMode: "fill" });
+  resetTextState(doc);
+  doc.text(line, x, y);
 }
 
 function addFooter(doc: jsPDF, page: number, total: number) {
@@ -49,10 +59,11 @@ function addFooter(doc: jsPDF, page: number, total: number) {
   doc.line(MARGIN, FOOTER_Y - 4, PAGE_W - MARGIN, FOOTER_Y - 4);
   doc.setFont("helvetica", "normal");
   doc.setFontSize(8);
-  doc.setCharSpace(0);
+  resetTextState(doc);
   doc.setTextColor(...MUTED);
   writeLine(doc, "Grounded evidence only. Missing values are left blank.", MARGIN, FOOTER_Y);
-  doc.text(`${page} / ${total}`, PAGE_W - MARGIN, FOOTER_Y, { align: "right", charSpace: 0 });
+  resetTextState(doc);
+  doc.text(`${page} / ${total}`, PAGE_W - MARGIN, FOOTER_Y, { align: "right" });
 }
 
 export function extractPdfText(doc: jsPDF): string {
@@ -72,9 +83,14 @@ export function extractPdfText(doc: jsPDF): string {
   return chunks.join("\n");
 }
 
+export function extractPdfCharSpaces(doc: jsPDF): number[] {
+  const raw = new TextDecoder("latin1").decode(doc.output("arraybuffer"));
+  return [...raw.matchAll(/([-+]?(?:\d+\.?\d*|\.\d+))\s+Tc/g)].map((match) => Number(match[1]));
+}
+
 export function renderActionPlanPdf(plan: ActionPlanDocument): jsPDF {
   const doc = new jsPDF({ unit: "mm", format: "a4", orientation: "landscape" });
-  doc.setCharSpace(0);
+  resetTextState(doc);
   doc.setLineHeightFactor(1.25);
   let y = 0;
 
@@ -91,7 +107,7 @@ export function renderActionPlanPdf(plan: ActionPlanDocument): jsPDF {
     doc.rect(MARGIN, y, 2.2, 6.2, "F");
     doc.setFont("helvetica", "bold");
     doc.setFontSize(12);
-    doc.setCharSpace(0);
+    resetTextState(doc);
     doc.setTextColor(...FOREST);
     writeLine(doc, title, MARGIN + 6, y + 5);
     y += 11;
@@ -103,7 +119,7 @@ export function renderActionPlanPdf(plan: ActionPlanDocument): jsPDF {
     const lines = wrap(doc, text, width);
     doc.setFont("helvetica", options?.italic ? "italic" : "normal");
     doc.setFontSize(options?.size ?? 10);
-    doc.setCharSpace(0);
+    resetTextState(doc);
     doc.setTextColor(...(options?.color ?? INK));
     for (const line of lines) {
       ensure(6);
@@ -120,6 +136,19 @@ export function renderActionPlanPdf(plan: ActionPlanDocument): jsPDF {
       return;
     }
     for (const block of blocks) {
+      if (block.type === "heading") {
+        ensure(14);
+        y += 2;
+        doc.setFillColor(...FOREST);
+        doc.rect(MARGIN, y, 2.2, 6.2, "F");
+        doc.setFont("helvetica", "bold");
+        doc.setFontSize(12);
+        resetTextState(doc);
+        doc.setTextColor(...FOREST);
+        writeLine(doc, block.text, MARGIN + 6, y + 5);
+        y += 11;
+        continue;
+      }
       if (block.type === "paragraph") {
         writeWrapped(block.text);
         y += 1.5;
@@ -131,7 +160,7 @@ export function renderActionPlanPdf(plan: ActionPlanDocument): jsPDF {
           ensure(6 + lines.length * 5);
           doc.setFont("helvetica", "normal");
           doc.setFontSize(10);
-          doc.setCharSpace(0);
+          resetTextState(doc);
           doc.setTextColor(...INK);
           writeLine(doc, "-", MARGIN, y);
           lines.forEach((line, index) => {
@@ -151,7 +180,7 @@ export function renderActionPlanPdf(plan: ActionPlanDocument): jsPDF {
         ensure(8 + (titleLines.length + bodyLines.length) * 5);
         doc.setFont("helvetica", "bold");
         doc.setFontSize(10);
-        doc.setCharSpace(0);
+        resetTextState(doc);
         doc.setTextColor(...INK);
         titleLines.forEach((line, lineIndex) => {
           if (lineIndex > 0) ensure(5);
@@ -180,7 +209,7 @@ export function renderActionPlanPdf(plan: ActionPlanDocument): jsPDF {
     doc.rect(MARGIN, y - 3.1, 3.4, 3.4);
     doc.setFont("helvetica", "normal");
     doc.setFontSize(10);
-    doc.setCharSpace(0);
+    resetTextState(doc);
     doc.setTextColor(...INK);
     lines.forEach((line, index) => {
       if (index > 0) ensure(5);
@@ -234,6 +263,7 @@ export function renderActionPlanPdf(plan: ActionPlanDocument): jsPDF {
         fontSize: 8,
         overflow: "linebreak",
         valign: "top",
+        halign: "left",
       },
       bodyStyles: {
         fillColor: CREAM,
@@ -254,7 +284,10 @@ export function renderActionPlanPdf(plan: ActionPlanDocument): jsPDF {
     const tableMeta = (doc as jsPDF & { lastAutoTable?: { finalY: number } }).lastAutoTable;
     doc.setPage(doc.getNumberOfPages());
     y = (tableMeta?.finalY ?? y) + 8;
-    doc.setCharSpace(0);
+    doc.setFont("helvetica", "normal");
+    doc.setFontSize(10);
+    resetTextState(doc);
+    doc.setTextColor(...INK);
   };
 
   doc.setFillColor(...FOREST);
@@ -263,7 +296,7 @@ export function renderActionPlanPdf(plan: ActionPlanDocument): jsPDF {
   doc.rect(0, 28, PAGE_W, 1.2, "F");
   doc.setFont("helvetica", "bold");
   doc.setFontSize(16);
-  doc.setCharSpace(0);
+  resetTextState(doc);
   doc.setTextColor(...CREAM);
   writeLine(doc, plan.heading, MARGIN, 14);
   doc.setFont("helvetica", "normal");
@@ -280,7 +313,7 @@ export function renderActionPlanPdf(plan: ActionPlanDocument): jsPDF {
       ensure(6 + Math.max(0, valueLines.length - 1) * 5);
       doc.setFont("helvetica", "bold");
       doc.setFontSize(9);
-      doc.setCharSpace(0);
+      resetTextState(doc);
       doc.setTextColor(...FOREST);
       writeLine(doc, row.label, MARGIN, y);
       doc.setFont("helvetica", "normal");
@@ -334,7 +367,7 @@ export function renderActionPlanPdf(plan: ActionPlanDocument): jsPDF {
     ensure(10);
     doc.setFont("helvetica", "bold");
     doc.setFontSize(10);
-    doc.setCharSpace(0);
+    resetTextState(doc);
     doc.setTextColor(...FOREST);
     writeLine(doc, "Internal knowledge base", MARGIN, y);
     y += 6;
@@ -346,7 +379,7 @@ export function renderActionPlanPdf(plan: ActionPlanDocument): jsPDF {
     ensure(10);
     doc.setFont("helvetica", "bold");
     doc.setFontSize(10);
-    doc.setCharSpace(0);
+    resetTextState(doc);
     doc.setTextColor(...FOREST);
     writeLine(doc, "External scientific sources", MARGIN, y);
     y += 6;

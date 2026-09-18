@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { parsePdfBlocks, stripMarkdownSyntax } from "./pdfMarkdown";
+import { parsePdfBlocks, splitInlineAtxHeadings, stripMarkdownSyntax } from "./pdfMarkdown";
+
+const INLINE_HEADING_SAMPLE = [
+  "Your 5 acre wheat field sits in a semi-arid zone with low, irregular rainfall. The soil dries quickly, suggesting limited water holding capacity. ## What to investigate first",
+  "1. **Measure soil organic carbon**: A baseline SOC value will tell you how much carbon input is needed.",
+  "2. **Monitor soil moisture dynamics**: Install a simple moisture probe.",
+  "3. **Assess current cover crop or residue presence**: Determine whether living cover exists.",
+].join("\n");
 
 describe("PDF markdown parsing", () => {
   it("strips markdown markers without leaving hashes or asterisks", () => {
@@ -35,5 +42,45 @@ describe("PDF markdown parsing", () => {
       body: "Determine whether SOC is low, moderate, or high.",
     });
     expect(blocks[0].items[1].title).toBe("Assess soil moisture");
+  });
+
+  it("splits inline ATX headings without touching URLs or C# tokens", () => {
+    const split = splitInlineAtxHeadings(
+      "Low soil organic carbon can reduce biodiversity. ## What to investigate first\nSee https://example.com/path#section and C# notes. ### Soil notes",
+    );
+    expect(split).toContain(".\n\n## What to investigate first");
+    expect(split).toContain(".\n\n### Soil notes");
+    expect(split).toContain("https://example.com/path#section");
+    expect(split).toContain("C# notes");
+    expect(splitInlineAtxHeadings(" ## Recommendations")).toBe(" ## Recommendations");
+  });
+
+  it("parses a mid-line markdown heading as a heading plus formatted list items", () => {
+    const blocks = parsePdfBlocks(INLINE_HEADING_SAMPLE);
+    expect(blocks.map((block) => block.type)).toEqual(["paragraph", "heading", "ordered-list"]);
+    expect(blocks[0]).toEqual({
+      type: "paragraph",
+      text: "Your 5 acre wheat field sits in a semi-arid zone with low, irregular rainfall. The soil dries quickly, suggesting limited water holding capacity.",
+    });
+    expect(blocks[1]).toEqual({ type: "heading", text: "What to investigate first" });
+    if (blocks[2].type !== "ordered-list") return;
+    expect(blocks[2].items).toEqual([
+      {
+        title: "Measure soil organic carbon",
+        body: "A baseline SOC value will tell you how much carbon input is needed.",
+      },
+      {
+        title: "Monitor soil moisture dynamics",
+        body: "Install a simple moisture probe.",
+      },
+      {
+        title: "Assess current cover crop or residue presence",
+        body: "Determine whether living cover exists.",
+      },
+    ]);
+    const serialized = JSON.stringify(blocks);
+    expect(serialized).not.toContain("##");
+    expect(serialized).not.toContain("**");
+    expect(serialized).not.toContain("|");
   });
 });
