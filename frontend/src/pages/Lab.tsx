@@ -1,6 +1,7 @@
 import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { ChatResponse, postChatStream } from "../api";
 import { LandDetailsForm } from "../components/LandDetailsForm";
+import { MarkdownMessage } from "../components/MarkdownMessage";
 import { downloadActionPlanPdf } from "../actionPlanPdf";
 import { recommendationItems } from "../actionPlan";
 import {
@@ -10,8 +11,21 @@ import {
   landDetailChips,
   mergeStructuredSources,
 } from "../landDetails";
+import { hideInternalEvidenceIds } from "../markdown";
 
 type Turn = { role: "user" | "assistant"; text: string; payload?: ChatResponse };
+
+function evidenceTitlesById(payload?: ChatResponse): Record<string, string> {
+  const titles: Record<string, string> = {};
+  for (const item of [...(payload?.kb_evidence || []), ...(payload?.external_evidence || [])]) {
+    const id = (item.evidence_id || "").trim().toLowerCase();
+    const title = (item.title || item.document_name || "").trim();
+    if (!id || !title) continue;
+    titles[id] = title;
+    titles[id.replace(/-/g, "")] = title;
+  }
+  return titles;
+}
 
 async function copyText(text: string) {
   try {
@@ -147,7 +161,7 @@ export function Lab() {
   }
 
   async function copyAnswer(text: string, index: number) {
-    const copied = await copyText(text);
+    const copied = await copyText(hideInternalEvidenceIds(text, evidenceTitlesById(latest || undefined)));
     setCopiedIndex(copied ? index : null);
     if (!copied) return;
     window.setTimeout(() => {
@@ -189,7 +203,11 @@ export function Lab() {
                     )}
                   </button>
                 )}
-                <div className="bubble-text">{turn.text}</div>
+                {turn.role === "assistant" ? (
+                  <MarkdownMessage text={turn.text} titlesById={evidenceTitlesById(turn.payload)} />
+                ) : (
+                  <div className="bubble-text">{turn.text}</div>
+                )}
               </div>
               {turn.role === "assistant" && turn.payload && (
                 <button
@@ -204,7 +222,11 @@ export function Lab() {
             </div>
           ))}
           {busy && !draft && <div className="bubble assistant">Reasoning… looking at your conditions and the evidence.</div>}
-          {busy && draft && <div className="bubble assistant">{draft}</div>}
+          {busy && draft && (
+            <div className="bubble assistant">
+              <MarkdownMessage text={draft} />
+            </div>
+          )}
         </div>
         <form className="composer" onSubmit={send}>
           {landDetailChips(landDetails).length > 0 && (

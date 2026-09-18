@@ -1,5 +1,6 @@
 import { jsPDF } from "jspdf";
 import { buildActionPlan, ActionPlanDocument } from "./actionPlan";
+import { MarkdownTable, stripMarkdownTables } from "./markdown";
 import { ChatResponse } from "./api";
 import { LandDetails } from "./landDetails";
 
@@ -52,7 +53,7 @@ export function renderActionPlanPdf(plan: ActionPlanDocument): jsPDF {
   };
 
   const body = (text: string, width = CONTENT_W) => {
-    const lines = wrap(doc, text, width);
+    const lines = wrap(doc, stripMarkdownTables(text), width);
     doc.setFont("helvetica", "normal");
     doc.setFontSize(10);
     doc.setTextColor(...INK);
@@ -101,6 +102,65 @@ export function renderActionPlanPdf(plan: ActionPlanDocument): jsPDF {
     }
   };
 
+  const table = (data: MarkdownTable) => {
+    const colCount = Math.max(1, data.headers.length);
+    const colW = CONTENT_W / colCount;
+    const pad = 1.5;
+    const lineH = 3.7;
+    const fontSize = colCount >= 5 ? 7.2 : 8.2;
+
+    const cellLines = (text: string) => {
+      doc.setFontSize(fontSize);
+      return wrap(doc, (text || "").replace(/\|/g, "/"), colW - pad * 2);
+    };
+    const rowHeight = (cells: string[]) => {
+      const maxLines = Math.max(1, ...cells.map((cell) => cellLines(cell).length));
+      return Math.min(PAGE_H - 40, Math.max(7.5, maxLines * lineH + pad * 2));
+    };
+    const drawRow = (cells: string[], header: boolean) => {
+      const height = rowHeight(cells);
+      ensure(height + 1);
+      if (header) {
+        doc.setFillColor(...FOREST);
+        doc.setTextColor(252, 249, 243);
+        doc.setFont("helvetica", "bold");
+      } else {
+        doc.setFillColor(252, 249, 243);
+        doc.setTextColor(...INK);
+        doc.setFont("helvetica", "normal");
+      }
+      doc.rect(MARGIN, y, CONTENT_W, height, "F");
+      doc.setDrawColor(...RULE);
+      doc.setLineWidth(0.2);
+      doc.rect(MARGIN, y, CONTENT_W, height);
+      cells.forEach((cell, index) => {
+        const x = MARGIN + index * colW;
+        if (index > 0) doc.line(x, y, x, y + height);
+        doc.setFontSize(fontSize);
+        if (header) {
+          doc.setFont("helvetica", "bold");
+          doc.setTextColor(252, 249, 243);
+        } else {
+          doc.setFont("helvetica", "normal");
+          doc.setTextColor(...INK);
+        }
+        cellLines(cell).forEach((line, lineIndex) => {
+          doc.text(line, x + pad, y + pad + 3.1 + lineIndex * lineH);
+        });
+      });
+      y += height;
+    };
+
+    drawRow(data.headers, true);
+    data.rows.forEach((row) => {
+      drawRow(
+        data.headers.map((_, index) => row[index] || ""),
+        false,
+      );
+    });
+    y += 3;
+  };
+
   doc.setFillColor(...FOREST);
   doc.rect(0, 0, PAGE_W, 36, "F");
   doc.setFillColor(...ACCENT);
@@ -141,31 +201,28 @@ export function renderActionPlanPdf(plan: ActionPlanDocument): jsPDF {
   if (plan.assessment) body(plan.assessment);
   else muted("No grounded assessment text was returned.");
 
-  section("3. Recommended Actions");
-  if (!plan.recommendations.length) {
-    muted("No recommendations were returned for this response.");
-  } else {
-    plan.recommendations.forEach((item, index) => {
-      checkbox(`${index + 1}. ${item.action}`);
-      body(`Why it may help: ${item.why || "The retrieved evidence does not support a more specific explanation."}`);
-      if (item.metrics.length) {
-        const metricText = item.metrics
-          .map((metric) => `${metric.name}: ${metric.note || "potentially affected"}`)
-          .join("; ");
-        body(`Impacted metrics: ${metricText}`);
-      } else {
-        muted("Impacted metrics: not returned for this recommendation.");
-      }
-      body(
-        `Time horizon: ${item.timeHorizon || "No specific timeframe is supported by the retrieved evidence."}`,
-      );
-      if (item.sources.length) body(`Supporting evidence: ${item.sources.join("; ")}`);
-      else muted("Supporting evidence: no titles were returned for this recommendation.");
-      y += 2;
-    });
+  if (plan.investigateFirst) {
+    section("3. What to investigate first");
+    body(plan.investigateFirst);
   }
 
-  section("4. Monitoring Checklist");
+  section(plan.investigateFirst ? "4. Recommendations" : "3. Recommendations");
+  if (plan.recommendationTable && plan.recommendationTable.rows.length) {
+    table(plan.recommendationTable);
+  } else {
+    muted("No recommendations were returned for this response.");
+  }
+
+  if (plan.whyTogether) {
+    section("Why these work together");
+    body(plan.whyTogether);
+  }
+  if (plan.nextSteps) {
+    section("Next steps");
+    body(plan.nextSteps);
+  }
+
+  section("Monitoring Checklist");
   if (!plan.monitoring.length) {
     muted("No impacted metrics were returned to monitor.");
   } else {
@@ -177,7 +234,7 @@ export function renderActionPlanPdf(plan: ActionPlanDocument): jsPDF {
     }
   }
 
-  section("5. Scientific Evidence");
+  section("Sources / Evidence");
   if (!plan.kbSources.length && !plan.externalSources.length) {
     muted("No supporting sources were used in the grounded response.");
   }
@@ -206,7 +263,7 @@ export function renderActionPlanPdf(plan: ActionPlanDocument): jsPDF {
     muted("No external scientific sources were used.");
   }
 
-  section("6. Limitations / Uncertainty");
+  section("Uncertainty");
   if (!plan.limitations.length) muted("No additional uncertainty statement was returned.");
   else plan.limitations.forEach((line) => body(line));
 

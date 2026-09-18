@@ -21,6 +21,8 @@ from app.services.prompting import (
     ensure_grounded_sources,
     extract_metrics_from_text,
     filter_evidence_for_answer,
+    parse_answer_sections,
+    replace_internal_evidence_ids,
     sanitize_time_horizon,
     word_count,
 )
@@ -368,3 +370,75 @@ def test_complete_recommendation_drops_evidence_id_bullets():
     assert "kb-80" not in actions
     assert rec.items
     assert all(item.why for item in rec.items)
+
+
+def test_replace_internal_ids_with_document_titles():
+    kb = EvidenceItem(
+        evidence_id="kb-6",
+        source="03.md",
+        document_name="03.md",
+        title="Monoculture, Agroforestry and Habitat Complexity",
+        passage="Simplified cropping reduces habitat complexity.",
+        origin="knowledge_base",
+    )
+    text = replace_internal_evidence_ids("Supported by kb-6 and kb-99.", [kb])
+    assert "kb-6" not in text
+    assert "kb-99" not in text
+    assert "Monoculture, Agroforestry and Habitat Complexity" in text
+
+
+def test_compose_hides_ids_and_keeps_one_recommendation_section():
+    rec = RecommendationBlock(
+        action="Keep residue and add drought-tolerant cover in the rainfall window.",
+        why_it_works="The retrieved soil synthesis links low organic carbon with weak water holding.",
+        environmental_relationships="Low carbon, low rainfall and simplified cropping may be interacting rather than acting alone.",
+        impacted_metrics=[ImpactedMetric(name="Soil organic carbon", direction="up")],
+        time_horizon=TimeHorizon(narrative="Several seasons to multiple years", evidence_supported=True),
+        uncertainty="Local trials would still be needed.",
+    )
+    kb = EvidenceItem(
+        evidence_id="kb-14",
+        source="02.md",
+        document_name="02.md",
+        title="Cover Crops, Residue Retention and Water-Holding Capacity in Semi-Arid Farming",
+        passage="Cover crops and residue can support water holding.",
+        origin="knowledge_base",
+    )
+    text = compose_user_facing_answer(
+        data={
+            "answer": (
+                "## Assessment Summary\nSeveral factors may be interacting.\n\n"
+                "## Recommendations\nUse cover crops (kb-14).\n\n"
+                "## Recommendations\nUse cover crops again.\n\n"
+                "## Sources / Evidence\n- kb-14\n"
+            )
+        },
+        rec=rec,
+        kb_evidence=[kb],
+        external_evidence=[],
+    )
+    assert text.lower().count("## recommendations") == 1
+    assert "kb-14" not in text
+    assert "Cover Crops, Residue Retention and Water-Holding Capacity in Semi-Arid Farming" in text
+    assert "## Assessment Summary" in text
+    assert "## Uncertainty" in text
+    headings = [line[3:].strip() for line in text.splitlines() if line.startswith("## ")]
+    assert headings.index("Assessment Summary") < headings.index("Recommendations")
+    assert headings.index("Recommendations") < headings.index("Sources / Evidence")
+    assert headings.index("Sources / Evidence") < headings.index("Uncertainty")
+
+
+def test_parse_answer_sections_moves_unheaded_table_out_of_assessment():
+    text = (
+        "Low carbon and low rainfall can interact.\n\n"
+        "| Action | Why it may help |\n"
+        "| --- | --- |\n"
+        "| Keep residue | Supports soil cover |\n\n"
+        "## Sources / Evidence\n"
+        "- Soil Organic Carbon, Soil pH, Moisture and Below-Ground Biodiversity\n"
+    )
+    sections = parse_answer_sections(text)
+    assert "Keep residue" in sections["recommendations"]
+    assert "|" not in sections["assessment_summary"]
+    assert "Sources" not in sections["recommendations"]
+

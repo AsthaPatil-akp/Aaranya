@@ -73,6 +73,16 @@ Write about 80-150 words for a simple question, 150-250 words for a normal envir
 - Then distinct recommendations, each covering what to do, why it may help, which metrics it could affect, how long the effect might take if the evidence supports a horizon, and which retrieved evidence supports it.
 - Close with a concise Sources / Evidence section and uncertainty.
 
+The answer field must use these Markdown headings, each at most once, in this order:
+## Assessment Summary
+## What to investigate first
+## Recommendations
+## Why these work together
+## Next steps
+## Sources / Evidence
+## Uncertainty
+If recommendations are tabular, use a GitHub-Flavored Markdown table. Never write internal ids such as kb-6 or oa-12 in the answer; name documents by title. Do not repeat a section.
+
 If no external scientific evidence was retrieved, do not pretend it was.
 
 Simple questions can be shorter.
@@ -119,9 +129,20 @@ Write about 250-450 words as a conversation:
 7. If a statement is not supported by retrieved passages, rewrite it as uncertainty or a question, or omit it. Do not leave unsupported claims in the answer.
 8. Close with a concise Sources / Evidence section listing only documents you actually used, then uncertainty.
 
+Use these Markdown headings, each at most once, in this order:
+## Assessment Summary
+## What to investigate first
+## Recommendations
+## Why these work together
+## Next steps
+## Sources / Evidence
+## Uncertainty
+If recommendations are tabular, use a GitHub-Flavored Markdown table.
+
 Do not invent studies, DOIs, percentages, timeframes, missing environmental values, or scientific findings.
 If no external scientific evidence is listed, do not pretend it was used.
 Name sources by document title, not internal ids such as kb-1.
+Never write internal evidence ids such as kb-6, kb-14, or oa-12 in the user-facing answer.
 """
 
 
@@ -409,19 +430,19 @@ def format_sources_section(
 ) -> str:
     if not kb_evidence and not external_evidence:
         return ""
-    lines = ["Sources / Evidence"]
+    lines = ["## Sources / Evidence"]
     if kb_evidence:
-        lines.append("Internal Knowledge Base")
+        lines.append("### Internal Knowledge Base")
         seen: set[str] = set()
         for item in kb_evidence:
             title = (item.title or item.document_name or "Internal synthesis").strip()
             if title in seen:
                 continue
             seen.add(title)
-            lines.append(f"- {title}")
+            lines.append(_source_bullet(item, title))
     if external_evidence:
-        lines.append("External Scientific Research")
-        seen: set[str] = set()
+        lines.append("### External Scientific Research")
+        seen = set()
         for item in external_evidence:
             title = (item.title or item.document_name or "External source").strip()
             if title in seen:
@@ -434,11 +455,26 @@ def format_sources_section(
                 extras.append("abstract-level evidence")
             elif item.evidence_level == "full_text":
                 extras.append("open-access text")
-            if item.doi:
-                extras.append(f"DOI {item.doi}")
             suffix = f" ({'; '.join(extras)})" if extras else ""
-            lines.append(f"- {title}{suffix}")
+            lines.append(_source_bullet(item, f"{title}{suffix}"))
     return "\n".join(lines)
+
+
+def _source_url(item: EvidenceItem) -> str:
+    url = (item.url or "").strip()
+    if url:
+        return url
+    doi = (item.doi or "").strip()
+    if not doi:
+        return ""
+    return doi if doi.startswith("http") else f"https://doi.org/{doi}"
+
+
+def _source_bullet(item: EvidenceItem, label: str) -> str:
+    url = _source_url(item)
+    if url:
+        return f"- [{label}]({url})"
+    return f"- {label}"
 
 
 def _metric_line(rec: RecommendationBlock) -> str:
@@ -676,34 +712,224 @@ def filter_evidence_for_answer(
     return kb_kept, ext_kept
 
 
-def _recommendation_paragraphs(data: dict[str, Any], rec: RecommendationBlock) -> list[str]:
-    paragraphs: list[str] = []
+_INTERNAL_ID = re.compile(r"\[?\b(?:kb|oa)[-:]?\s*\d+\b\]?", re.I)
+_SECTION_ORDER: tuple[tuple[str, str], ...] = (
+    ("assessment_summary", "Assessment Summary"),
+    ("investigate_first", "What to investigate first"),
+    ("recommendations", "Recommendations"),
+    ("why_together", "Why these work together"),
+    ("next_steps", "Next steps"),
+    ("sources", "Sources / Evidence"),
+    ("uncertainty", "Uncertainty"),
+)
+_HEADING_ALIASES: tuple[tuple[str, re.Pattern[str]], ...] = (
+    ("assessment_summary", re.compile(r"^assessment summary$", re.I)),
+    ("investigate_first", re.compile(r"^what to investigate first$", re.I)),
+    (
+        "investigate_first",
+        re.compile(r"^what i would investigate first(?:, based on the retrieved evidence)?$", re.I),
+    ),
+    ("investigate_first", re.compile(r"^investigate first$", re.I)),
+    ("recommendations", re.compile(r"^recommendations?$", re.I)),
+    ("recommendations", re.compile(r"^recommended actions?$", re.I)),
+    ("why_together", re.compile(r"^why these work together$", re.I)),
+    ("why_together", re.compile(r"^why (?:it|they)(?: may)? work(?: together)?$", re.I)),
+    ("next_steps", re.compile(r"^next steps?$", re.I)),
+    ("sources", re.compile(r"^sources(?:\s*/\s*evidence)?$", re.I)),
+    ("sources", re.compile(r"^references$", re.I)),
+    ("sources", re.compile(r"^internal knowledge base$", re.I)),
+    ("sources", re.compile(r"^external scientific (?:research|sources)$", re.I)),
+    ("uncertainty", re.compile(r"^uncertainty$", re.I)),
+    ("uncertainty", re.compile(r"^limitations?(?:\s*/\s*uncertainty)?$", re.I)),
+)
+
+
+def replace_internal_evidence_ids(text: str, evidence: list[EvidenceItem]) -> str:
+    mapping: dict[str, str] = {}
+    for item in evidence:
+        eid = (item.evidence_id or "").strip()
+        title = (item.title or item.document_name or "").strip()
+        if not eid or not title:
+            continue
+        compact = re.sub(r"[\s:_-]", "", eid.lower())
+        hyphen = re.sub(r"[\s:]", "", eid.lower()).replace("_", "-")
+        mapping[compact] = title
+        mapping[hyphen] = title
+
+    def repl(match: re.Match[str]) -> str:
+        raw = match.group(0)
+        compact = re.sub(r"[\[\]\s:_-]", "", raw.lower())
+        hyphen = re.sub(r"[\[\]\s:]", "", raw.lower()).replace("_", "-")
+        return mapping.get(compact) or mapping.get(hyphen) or ""
+
+    cleaned = _INTERNAL_ID.sub(repl, text or "")
+    cleaned = re.sub(r"[^\S\n]{2,}", " ", cleaned)
+    cleaned = re.sub(r"[ \t]*\([ \t]*\)", "", cleaned)
+    cleaned = re.sub(r"(?:,\s*){2,}", ", ", cleaned)
+    cleaned = re.sub(r"\s+([,;:.])", r"\1", cleaned)
+    cleaned = re.sub(r"\n[ \t]+", "\n", cleaned)
+    cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
+    return cleaned.strip()
+
+
+def _heading_key(line: str) -> str | None:
+    stripped = re.sub(r"^#{1,6}\s*", "", (line or "").strip())
+    stripped = re.sub(r"\*+", "", stripped).strip().rstrip(":.").strip()
+    if not stripped or len(stripped) > 80:
+        return None
+    for key, pattern in _HEADING_ALIASES:
+        if pattern.match(stripped):
+            return key
+    return None
+
+
+def _is_table_row(line: str) -> bool:
+    trimmed = line.strip()
+    return trimmed.startswith("|") and "|" in trimmed[1:]
+
+
+def _is_table_separator(line: str) -> bool:
+    return bool(re.match(r"^\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)+\|?\s*$", (line or "").strip()))
+
+
+def _has_markdown_table(text: str) -> bool:
+    lines = (text or "").splitlines()
+    return any(
+        _is_table_row(line) and index + 1 < len(lines) and _is_table_separator(lines[index + 1])
+        for index, line in enumerate(lines)
+    )
+
+
+def parse_answer_sections(text: str) -> dict[str, str]:
+    sections = {key: "" for key, _title in _SECTION_ORDER}
+    buckets: dict[str, list[str]] = {key: [] for key in sections}
+    current = "assessment_summary"
+    lines = (text or "").replace("\r\n", "\n").split("\n")
+    for line in lines:
+        key = _heading_key(line)
+        if key:
+            current = key
+            continue
+        buckets[current].append(line)
+    if not "".join(buckets["recommendations"]).strip() and _has_markdown_table("\n".join(buckets["assessment_summary"])):
+        assessment_lines = buckets["assessment_summary"]
+        table_at = next(
+            (
+                index
+                for index, line in enumerate(assessment_lines)
+                if _is_table_row(line)
+                and index + 1 < len(assessment_lines)
+                and _is_table_separator(assessment_lines[index + 1])
+            ),
+            -1,
+        )
+        if table_at >= 0:
+            end = table_at + 2
+            while (
+                end < len(assessment_lines)
+                and _is_table_row(assessment_lines[end])
+                and not _is_table_separator(assessment_lines[end])
+            ):
+                end += 1
+            buckets["recommendations"] = assessment_lines[table_at:end]
+            buckets["assessment_summary"] = assessment_lines[:table_at] + assessment_lines[end:]
+    for key, rows in buckets.items():
+        sections[key] = "\n".join(rows).strip()
+    return sections
+
+
+def render_canonical_answer(sections: dict[str, str]) -> str:
+    parts: list[str] = []
+    seen_bodies: set[str] = set()
+    for key, title in _SECTION_ORDER:
+        body = (sections.get(key) or "").strip()
+        if not body:
+            continue
+        signature = re.sub(r"\s+", " ", body.lower())[:180]
+        if signature in seen_bodies:
+            continue
+        seen_bodies.add(signature)
+        if key == "sources" and body.lstrip().lower().startswith("## sources"):
+            parts.append(body)
+        else:
+            parts.append(f"## {title}\n\n{body}")
+    return "\n\n".join(parts).strip()
+
+
+def _md_cell(value: str) -> str:
+    return re.sub(r"\s+", " ", (value or "").replace("|", "/")).strip()
+
+
+def _markdown_table(headers: list[str], rows: list[list[str]]) -> str:
+    if not headers or not rows:
+        return ""
+    header = "| " + " | ".join(_md_cell(item) for item in headers) + " |"
+    rule = "| " + " | ".join("---" for _ in headers) + " |"
+    body = ["| " + " | ".join(_md_cell(cell) for cell in row) + " |" for row in rows]
+    return "\n".join([header, rule, *body])
+
+
+def _looks_like_internal_action(action: str) -> bool:
+    text = (action or "").strip()
+    return bool(re.match(r"^(?:kb|oa)[-:]?\s*\d+", text, re.I))
+
+
+def _recommendations_as_markdown(
+    data: dict[str, Any],
+    rec: RecommendationBlock,
+    evidence: list[EvidenceItem],
+) -> str:
+    titles = evidence_titles(evidence)
+    rows: list[list[str]] = []
+    seen: set[str] = set()
+
+    def add_row(action: str, why: str, metrics: list[str], horizon: str, sources: list[str]) -> None:
+        cleaned = replace_internal_evidence_ids(action, evidence).strip()
+        key = re.sub(r"\s+", " ", cleaned.lower())
+        if not cleaned or key in seen or _looks_like_internal_action(cleaned) or _looks_like_source_line(cleaned, titles):
+            return
+        seen.add(key)
+        rows.append(
+            [
+                cleaned,
+                replace_internal_evidence_ids(why, evidence),
+                "; ".join(metrics),
+                horizon,
+                "; ".join(sources),
+            ]
+        )
+
+    parent_metrics = [metric.name for metric in rec.impacted_metrics if metric.name]
+    parent_horizon = _horizon_line(rec)
+    parent_sources = list(rec.supporting_evidence or titles)
     raw_recs = data.get("recommendations") or []
-    items: list[tuple[str, str]] = []
-    if isinstance(raw_recs, list):
+    if rec.items:
+        for item in rec.items:
+            add_row(
+                item.action,
+                item.why or rec.why_it_works,
+                [metric.name for metric in (item.impacted_metrics or rec.impacted_metrics) if metric.name] or parent_metrics,
+                (item.time_horizon or parent_horizon),
+                list(item.supporting_evidence or parent_sources),
+            )
+    elif isinstance(raw_recs, list) and raw_recs:
         for item in raw_recs:
             if isinstance(item, dict):
-                action = str(item.get("action") or item.get("recommendation") or "").strip()
-                why = str(item.get("why") or item.get("why_it_works") or "").strip()
-                if action:
-                    items.append((action, why))
-            elif isinstance(item, str) and item.strip():
-                items.append((item.strip(), ""))
-    if items:
-        bullets = []
-        for action, why in items:
-            if why:
-                bullets.append(f"- {action.rstrip('.')} — {why}")
-            else:
-                bullets.append(f"- {action}")
-        paragraphs.append("What I would investigate first, based on the retrieved evidence:\n" + "\n".join(bullets))
-        return paragraphs
-    if rec.action:
-        text = rec.action
-        if rec.why_it_works:
-            text = f"{rec.action.rstrip('.')} {rec.why_it_works}"
-        paragraphs.append(text)
-    return paragraphs
+                add_row(
+                    str(item.get("action") or item.get("recommendation") or ""),
+                    str(item.get("why") or item.get("why_it_works") or rec.why_it_works or ""),
+                    [str(metric) for metric in (item.get("metrics") or parent_metrics)],
+                    parent_horizon,
+                    parent_sources,
+                )
+            elif isinstance(item, str):
+                add_row(item, rec.why_it_works, parent_metrics, parent_horizon, parent_sources)
+    elif rec.action:
+        add_row(rec.action, rec.why_it_works, parent_metrics, parent_horizon, parent_sources)
+    return _markdown_table(
+        ["Action", "Why it may help", "Impacted metrics", "Time horizon", "Supporting evidence"],
+        rows,
+    )
 
 
 def compose_user_facing_answer(
@@ -718,57 +944,38 @@ def compose_user_facing_answer(
     This does not inject farm-specific advice. It only rearranges model text and
     lists the evidence that was actually retrieved.
     """
-    parts: list[str] = []
-    answer = str(data.get("answer") or data.get("_answer") or rec.action or "").strip()
-    if answer:
-        parts.append(answer)
-    combined = answer
-    already_complete = word_count(answer) >= 200 and "based on the conditions" in answer.lower()
+    evidence = [*kb_evidence, *external_evidence]
+    answer = replace_internal_evidence_ids(
+        str(data.get("answer") or data.get("_answer") or rec.action or "").strip(),
+        evidence,
+    )
+    sections = parse_answer_sections(answer)
+    combined = "\n\n".join(part for part in sections.values() if part)
 
-    if not already_complete:
-        relationships = (rec.environmental_relationships or "").strip()
-        if relationships and not _already_said(relationships, combined):
-            parts.append(relationships)
-            combined = "\n\n".join(parts)
+    relationships = (rec.environmental_relationships or "").strip()
+    if relationships and not _already_said(relationships, combined):
+        sections["assessment_summary"] = "\n\n".join(
+            part for part in [sections.get("assessment_summary", ""), relationships] if part
+        ).strip()
+        combined = "\n\n".join(part for part in sections.values() if part)
 
-        for paragraph in _recommendation_paragraphs(data, rec):
-            if paragraph and not _already_said(paragraph, combined):
-                if rec.action and rec.action.lower() in combined.lower() and "What I would investigate first" not in paragraph:
-                    if rec.why_it_works and not _already_said(rec.why_it_works, combined):
-                        parts.append(rec.why_it_works)
-                        combined = "\n\n".join(parts)
-                    continue
-                parts.append(paragraph)
-                combined = "\n\n".join(parts)
+    table = _recommendations_as_markdown(data, rec, evidence)
+    rec_body = sections.get("recommendations") or ""
+    if table and not _has_markdown_table(rec_body):
+        sections["recommendations"] = table
+    elif not rec_body and table:
+        sections["recommendations"] = table
 
-        metric_line = _metric_line(rec)
-        if metric_line and not _already_said(metric_line, combined):
-            names = [metric.name.lower() for metric in rec.impacted_metrics]
-            if not any(name in combined.lower() for name in names[:2] if name):
-                parts.append(metric_line)
-                combined = "\n\n".join(parts)
+    why = (rec.why_it_works or "").strip()
+    if why and not sections.get("why_together") and not _already_said(why, combined):
+        sections["why_together"] = why
 
-        horizon = _horizon_line(rec)
-        if horizon and not _already_said(horizon, combined):
-            parts.append(horizon)
-            combined = "\n\n".join(parts)
+    uncertainty = (rec.uncertainty or "").strip()
+    if uncertainty and not sections.get("uncertainty"):
+        sections["uncertainty"] = uncertainty
 
-        uncertainty = (rec.uncertainty or "").strip()
-        if uncertainty and not _already_said(uncertainty, combined):
-            parts.append(uncertainty)
-            combined = "\n\n".join(parts)
-
-    body = "\n\n".join(part.strip() for part in parts if part and part.strip())
-    sources = format_sources_section(kb_evidence, external_evidence)
-    if sources and "internal knowledge base" not in body.lower() and "sources / evidence" not in body.lower():
-        body = f"{body}\n\n{sources}" if body else sources
-    return body.strip()
-
-
-_SOURCE_HEADING = re.compile(
-    r"(?is)\n+(?:sources(?:\s*/\s*evidence)?|references)\s*:?\s*\n"
-)
-_UNCERTAINTY_HEADING = re.compile(r"(?is)\n+uncertainty:\s*\n")
+    sections["sources"] = format_sources_section(kb_evidence, external_evidence)
+    return render_canonical_answer(sections)
 
 
 def ensure_grounded_sources(
@@ -777,19 +984,11 @@ def ensure_grounded_sources(
     external_evidence: list[EvidenceItem],
 ) -> str:
     """Keep the model's explanation, but list only retrieved sources."""
-    body = text or ""
-    uncertainty = ""
-    unc_split = _UNCERTAINTY_HEADING.split(body, maxsplit=1)
-    if len(unc_split) == 2:
-        body = unc_split[0]
-        uncertainty = _SOURCE_HEADING.split(unc_split[1], maxsplit=1)[0].strip()
-    body = _SOURCE_HEADING.split(body, maxsplit=1)[0].rstrip()
-    if uncertainty and "uncertain" not in body.lower() and "limitation" not in body.lower():
-        body = f"{body}\n\n{uncertainty}"
-    sources = format_sources_section(kb_evidence, external_evidence)
-    if sources:
-        body = f"{body}\n\n{sources}" if body else sources
-    return body.strip()
+    evidence = [*kb_evidence, *external_evidence]
+    cleaned = replace_internal_evidence_ids(text or "", evidence)
+    sections = parse_answer_sections(cleaned)
+    sections["sources"] = format_sources_section(kb_evidence, external_evidence)
+    return render_canonical_answer(sections)
 
 
 def is_complex_environmental_case(context: EnvironmentalContext, message: str) -> bool:

@@ -111,6 +111,7 @@ describe("action plan PDF data", () => {
     expect(plan.siteProfile.find((row) => row.label === "Pollution")).toBeUndefined();
     expect(plan.assessment).toContain("Cover crops may help");
     expect(plan.assessment).not.toContain("Sources / Evidence");
+    expect(plan.assessment).not.toMatch(/\|/);
     expect(plan.recommendations).toHaveLength(1);
     expect(plan.recommendations[0].why).toContain("residue");
     expect(plan.monitoring).toEqual([
@@ -185,5 +186,61 @@ describe("action plan PDF data", () => {
     );
     expect(complete.getNumberOfPages()).toBeGreaterThanOrEqual(1);
     expect(complete.output("arraybuffer").byteLength).toBeGreaterThan(sparse.output("arraybuffer").byteLength);
+  });
+
+  it("renders recommendation markdown as a PDF table without pipe syntax", () => {
+    const doc = renderActionPlanPdf(
+      buildActionPlan(
+        {
+          ...baseResponse,
+          mode: "recommendation",
+          assistant_message: [
+            "## Assessment Summary",
+            "Low soil carbon and low rainfall can interact.",
+            "",
+            "## Recommendations",
+            "| Action | Why it may help | Supporting evidence |",
+            "| --- | --- | --- |",
+            "| Keep residue | Supports soil cover | Cover Crops, Residue Retention and Water-Holding Capacity in Semi-Arid Farming |",
+            "",
+            "## Recommendations",
+            "| Action | Why it may help | Supporting evidence |",
+            "| --- | --- | --- |",
+            "| Keep residue | Supports soil cover | Cover Crops, Residue Retention and Water-Holding Capacity in Semi-Arid Farming |",
+            "",
+            "## Sources / Evidence",
+            "- kb-14",
+          ].join("\n"),
+          recommendation: {
+            action: "Keep residue.",
+            why_it_works: "Residue can protect soil.",
+            environmental_relationships: "",
+            impacted_metrics: [{ name: "Soil organic carbon", direction: "unknown", note: "potentially affected" }],
+            time_horizon: { narrative: "Several seasons to multiple years", evidence_supported: true },
+            uncertainty: "Outcomes still depend on rainfall.",
+            confidence: "medium",
+            confidence_rationale: "Retrieved passages were available.",
+          },
+          kb_evidence: [
+            {
+              source: "02.md",
+              document_name: "02.md",
+              title: "Cover Crops, Residue Retention and Water-Holding Capacity in Semi-Arid Farming",
+              page: null,
+              topic: null,
+              document_type: null,
+              passage: "Cover crops and residue can support water holding.",
+              relevance_score: 0.8,
+              origin: "knowledge_base",
+            },
+          ],
+        },
+        EMPTY_LAND_DETAILS,
+      ),
+    );
+    const text = new TextDecoder("latin1").decode(doc.output("arraybuffer"));
+    expect(text).not.toMatch(/\|\s*Action\s*\|/);
+    expect(text).not.toMatch(/kb-14/);
+    expect(text).toContain("Keep residue");
   });
 });

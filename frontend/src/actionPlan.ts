@@ -1,6 +1,12 @@
 import { ChatResponse, EvidenceItem } from "./api";
 import { PDF_HEADING } from "./brand";
 import { LandDetails } from "./landDetails";
+import {
+  extractAnswerSections,
+  hideInternalEvidenceIds,
+  parseMarkdownTables,
+  MarkdownTable,
+} from "./markdown";
 
 export type ActionPlanMetric = { name: string; direction: string; note?: string | null };
 
@@ -31,6 +37,10 @@ export type ActionPlanDocument = {
   generatedLabel: string;
   siteProfile: ActionPlanProfileRow[];
   assessment: string;
+  investigateFirst: string;
+  whyTogether: string;
+  nextSteps: string;
+  recommendationTable: MarkdownTable | null;
   recommendations: ActionPlanRecommendation[];
   monitoring: ActionPlanMonitor[];
   kbSources: ActionPlanSource[];
@@ -94,17 +104,21 @@ export function recommendationItems(response: ChatResponse): ActionPlanRecommend
   const cards: ActionPlanRecommendation[] = [];
   const seen = new Set<string>();
   for (const item of raw) {
-    const action = (item.action || rec.action || "").trim();
+    const rawAction = (item.action || rec.action || "").trim();
+    if (!rawAction || /^(kb|oa)[-:]/i.test(rawAction)) continue;
+    const action = hideInternalEvidenceIds(rawAction).replace(/^[:\-–—]\s*/, "").trim();
     const key = action.toLowerCase().replace(/\s+/g, " ");
-    if (!action || seen.has(key) || /^(kb|oa)[-:]/i.test(action)) continue;
+    if (!action || seen.has(key)) continue;
     seen.add(key);
     cards.push({
       action,
-      why: (item.why || rec.why_it_works || "").trim(),
+      why: hideInternalEvidenceIds(item.why || rec.why_it_works || "").trim(),
       metrics: item.impacted_metrics?.length ? item.impacted_metrics : rec.impacted_metrics || [],
-      timeHorizon: (item.time_horizon || parentHorizon).trim(),
+      timeHorizon: hideInternalEvidenceIds(item.time_horizon || parentHorizon).trim(),
       sources: uniqueTitles(
-        item.supporting_evidence?.length ? item.supporting_evidence : rec.supporting_evidence || [],
+        (item.supporting_evidence?.length ? item.supporting_evidence : rec.supporting_evidence || []).map(
+          (title) => hideInternalEvidenceIds(title),
+        ),
       ),
     });
   }
@@ -165,10 +179,53 @@ export function siteProfileRows(response: ChatResponse, landDetails: LandDetails
   return rows;
 }
 
+function metricCell(metrics: ActionPlanMetric[]): string {
+  if (!metrics.length) return "";
+  return metrics
+    .map((metric) => `${metric.name}: ${metric.note || "potentially affected"}`)
+    .join("; ");
+}
+
+export function recommendationTableFromItems(items: ActionPlanRecommendation[]): MarkdownTable | null {
+  if (!items.length) return null;
+  return {
+    headers: ["Action", "Why it may help", "Impacted metrics", "Time horizon", "Supporting evidence"],
+    rows: items.map((item) => [
+      hideInternalEvidenceIds(item.action),
+      hideInternalEvidenceIds(item.why),
+      hideInternalEvidenceIds(metricCell(item.metrics)),
+      hideInternalEvidenceIds(item.timeHorizon),
+      hideInternalEvidenceIds(item.sources.join("; ")),
+    ]),
+  };
+}
+
 export function groundedAssessment(response: ChatResponse): string {
-  const text = (response.assistant_message || "").trim();
+  const text = hideInternalEvidenceIds((response.assistant_message || "").trim());
   if (!text) return "";
+  const sections = extractAnswerSections(text);
+  if (sections.assessment_summary) return sections.assessment_summary;
   return text.split(/(?:\n+|[.!?]\s+)sources?\s*\/?\s*evidence\b/i)[0].trim();
+}
+
+export function planSections(response: ChatResponse) {
+  const text = hideInternalEvidenceIds((response.assistant_message || "").trim());
+  return extractAnswerSections(text);
+}
+
+export function recommendationTableForPlan(
+  response: ChatResponse,
+  items: ActionPlanRecommendation[],
+): MarkdownTable | null {
+  const sections = planSections(response);
+  const fromMarkdown = parseMarkdownTables(sections.recommendations || response.assistant_message || "");
+  if (fromMarkdown[0]) {
+    return {
+      headers: fromMarkdown[0].headers.map((header) => hideInternalEvidenceIds(header)),
+      rows: fromMarkdown[0].rows.map((row) => row.map((cell) => hideInternalEvidenceIds(cell))),
+    };
+  }
+  return recommendationTableFromItems(items);
 }
 
 function evidenceLevelLabel(item: EvidenceItem): string {
@@ -240,15 +297,20 @@ function limitationLines(response: ChatResponse): string[] {
 
 export function buildActionPlan(response: ChatResponse, landDetails: LandDetails): ActionPlanDocument {
   const recommendations = recommendationItems(response);
+  const sections = planSections(response);
   return {
     heading: PDF_HEADING,
     generatedLabel: "Prepared from the grounded Lab response. Unsupported values are omitted.",
     siteProfile: siteProfileRows(response, landDetails),
-    assessment: groundedAssessment(response),
+    assessment: sections.assessment_summary || groundedAssessment(response),
+    investigateFirst: sections.investigate_first,
+    whyTogether: sections.why_together,
+    nextSteps: sections.next_steps,
+    recommendationTable: recommendationTableForPlan(response, recommendations),
     recommendations,
     monitoring: monitoringItems(response, recommendations),
     kbSources: mapSources(response.kb_evidence || [], "knowledge_base"),
     externalSources: mapSources(response.external_evidence || [], "external"),
-    limitations: limitationLines(response),
+    limitations: limitationLines(response).map((line) => hideInternalEvidenceIds(line)),
   };
 }

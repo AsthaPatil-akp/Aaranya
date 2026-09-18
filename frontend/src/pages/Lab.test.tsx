@@ -224,6 +224,25 @@ describe("Intelligence Lab land details", () => {
     expect(payload.structured).toBeUndefined();
   });
 
+  it("renders assistant markdown tables instead of pipe syntax", async () => {
+    vi.mocked(postChatStream).mockResolvedValue({
+      ...emptyResponse,
+      mode: "recommendation",
+      assistant_message:
+        "## Assessment Summary\nLow carbon and rainfall can interact.\n\n## Recommendations\n| Action | Why it may help |\n| --- | --- |\n| Keep residue | Supports soil cover |\n",
+    });
+    render(<Lab />);
+    fireEvent.change(screen.getByPlaceholderText(/Type a new question/), {
+      target: { value: "What should I do on my wheat farm?" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+    expect(await screen.findByTestId("assistant-markdown")).toBeInTheDocument();
+    expect(screen.getByRole("table")).toBeInTheDocument();
+    expect(screen.getByRole("columnheader", { name: "Action" })).toBeInTheDocument();
+    expect(screen.getByRole("cell", { name: "Keep residue" })).toBeInTheDocument();
+    expect(screen.queryByText(/\| Action \|/)).not.toBeInTheDocument();
+  });
+
   it("copies an assistant answer", async () => {
     const writeText = vi.fn().mockResolvedValue(undefined);
     Object.assign(navigator, { clipboard: { writeText } });
