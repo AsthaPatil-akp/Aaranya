@@ -1,7 +1,9 @@
-# Secrets
+# Secrets and local env (keep committed examples)
 .env
-.env.local
-.env.*.local
+.env.*
+!.env.example
+!frontend/.env.example
+
 *.pem
 *.key
 credentials*.json
@@ -25,19 +27,22 @@ dist/
 build/
 
 # Node
+node_modules/
 frontend/node_modules/
 frontend/dist/
 npm-debug.log*
 
-# Runtime data
+# Runtime data / generated stores / models
 data/
 backend/data/
 *.db
 *.sqlite
 *.sqlite3
+*.log
 
-# Generated PDFs may be rebuilt; keep source markdown
-# (committed PDFs in knowledge/pdfs are allowed)
+# Generated Word submission (local only — not GitHub)
+docs/SUBMISSION_DRAFT.docx
+docs/*.docx
 
 # OS / IDE
 .DS_Store
@@ -46,5 +51,6 @@ Thumbs.db
 .vscode/
 *.swp
 
-# Downloaded embedding caches
+# Downloaded embedding / Hugging Face caches
 .cache/
+.huggingface/

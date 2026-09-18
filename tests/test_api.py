@@ -26,6 +26,12 @@ def test_health_reports_live_stack():
     assert "llm_configured" in body
 
 
+def test_liveness_endpoint():
+    response = client.get("/health")
+    assert response.status_code == 200
+    assert response.json() == {"status": "ok"}
+
+
 def test_empty_chat_is_400():
     response = client.post("/api/chat", json={"message": ""})
     assert response.status_code == 400

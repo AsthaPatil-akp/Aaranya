@@ -1,0 +1,57 @@
+services:
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "8000:8000"
+    environment:
+      APP_NAME: Aaranya
+      APP_ENV: production
+      API_HOST: 0.0.0.0
+      PORT: "8000"
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://127.0.0.1:5173,http://localhost:5173}
+      FRONTEND_ORIGIN: ${FRONTEND_ORIGIN:-}
+      CORS_ORIGIN_REGEX: ${CORS_ORIGIN_REGEX:-}
+      DATA_DIR: /data
+      SQLITE_PATH: /data/darukaa.sqlite
+      CHROMA_PATH: /data/chroma
+      CHROMA_COLLECTION: darukaa_knowledge
+      KNOWLEDGE_DIR: /app/knowledge
+      PDF_DIR: /data/pdfs
+      SOURCE_DIR: /app/knowledge/sources
+      EMBEDDING_BACKEND: sentence-transformers
+      EMBEDDING_MODEL: all-MiniLM-L6-v2
+      LLM_PROVIDER: ${LLM_PROVIDER:-ollama}
+      OLLAMA_BASE_URL: http://ollama:11434
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-llama3.2:3b}
+      OLLAMA_TIMEOUT_SECONDS: ${OLLAMA_TIMEOUT_SECONDS:-120}
+      ENABLE_OPENALEX: ${ENABLE_OPENALEX:-true}
+      OPENALEX_MAILTO: ${OPENALEX_MAILTO:-darukaa-prototype@example.org}
+      ADMIN_API_TOKEN: ${ADMIN_API_TOKEN:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      GROQ_API_KEY: ${GROQ_API_KEY:-}
+    volumes:
+      - aaranya-data:/data
+    depends_on:
+      ollama:
+        condition: service_started
+    restart: unless-stopped
+
+  ollama:
+    image: ollama/ollama:latest
+    entrypoint: ["/bin/sh", "/entrypoint.sh"]
+    environment:
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-llama3.2:3b}
+      OLLAMA_KEEP_ALIVE: 24h
+    volumes:
+      - ollama-data:/root/.ollama
+      - ./docker/ollama-entrypoint.sh:/entrypoint.sh:ro
+    ports:
+      - "11434:11434"
+    restart: unless-stopped
+
+volumes:
+  aaranya-data:
+  ollama-data:

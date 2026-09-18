@@ -1,17 +1,26 @@
 # Database and vector schema
 
-## SQLite `data/darukaa.sqlite`
+## SQLite
 
-Kept for conversations, messages, environmental context, and a document catalog.
+Path: `SQLITE_PATH` or `{DATA_DIR}/darukaa.sqlite` (Docker: `/data/darukaa.sqlite`).
 
-Conversations and messages are never mixed across `session_id` values.
+| Table | Purpose |
+|---|---|
+| `conversations` | `id` (session), timestamps, `context_json` |
+| `messages` | chat turns keyed by `session_id` |
+| `documents` | ingested file catalog and bibliographic metadata |
+| `chunks` | chunk text, page, `page_is_real` |
 
-## ChromaDB `data/chroma`
+Conversations are never mixed across `session_id` values. WAL is enabled when SQLite allows it.
 
-Collection: `darukaa_knowledge` (configurable).
+## ChromaDB
 
-Each vector is one chunk, with metadata: document name, source, page, whether the page is a real PDF page, topic, type, checksum, title, authors, URL/DOI, year, origin.
+Path: `CHROMA_PATH` or `{DATA_DIR}/chroma`. Collection: `CHROMA_COLLECTION` (default `darukaa_knowledge`).
 
-Embeddings are produced by `sentence-transformers` (`all-MiniLM-L6-v2`, 384 dimensions) and stored with the collection. HashingVectorizer is not used in production.
+Each embedding is one chunk with metadata: document name, source, page, `page_is_real`, topic, document type, checksum, title, authors, URL, DOI, year, origin.
 
-Rebuild with `POST /api/knowledge/rebuild` (admin token) or `python scripts/kb.py rebuild`.
+Embeddings: `sentence-transformers` `all-MiniLM-L6-v2`, 384 dimensions, cosine space.
+
+Rebuild with `POST /api/knowledge/rebuild` (`X-Admin-Token`) or `python scripts/kb.py rebuild`.
+
+Runtime files under `data/` are gitignored. Seed Markdown under `knowledge/sources/` is committed.

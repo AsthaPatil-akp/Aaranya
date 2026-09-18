@@ -6,6 +6,7 @@
 [build.environment]
   NODE_VERSION = "20"
 
+# SPA fallback. Do not proxy /api here — the FastAPI backend is hosted elsewhere.
 [[redirects]]
   from = "/*"
   to = "/index.html"

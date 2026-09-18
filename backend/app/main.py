@@ -48,15 +48,24 @@ app = FastAPI(
 
 origins = settings.cors_origin_list or ["http://localhost:5173"]
 if settings.app_env == "development" and "*" not in origins:
-    origins = list(origins) + ["http://127.0.0.1:5173", "http://localhost:8000"]
+    for extra in ("http://127.0.0.1:5173", "http://localhost:8000"):
+        if extra not in origins:
+            origins.append(extra)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=origins,
+    allow_origin_regex=settings.cors_origin_regex or None,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 app.include_router(router)
+
+
+@app.get("/health")
+def liveness() -> dict[str, str]:
+    return {"status": "ok"}
+
 
 frontend_dist = Path(__file__).resolve().parents[2] / "frontend" / "dist"
 if not frontend_dist.exists():
@@ -68,7 +77,14 @@ if frontend_dist.exists():
 def run() -> None:
     import uvicorn
 
-    uvicorn.run("app.main:app", host=settings.api_host, port=settings.api_port, reload=settings.app_env == "development")
+    uvicorn.run(
+        "app.main:app",
+        host=settings.api_host,
+        port=settings.listen_port,
+        reload=settings.app_env == "development",
+        proxy_headers=True,
+        forwarded_allow_ips="*",
+    )
 
 
 if __name__ == "__main__":

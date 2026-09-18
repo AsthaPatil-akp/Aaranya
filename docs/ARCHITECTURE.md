@@ -1,23 +1,31 @@
 # Architecture
 
-Darukaa.Earth is a hybrid scientific assistant: internal RAG over ChromaDB, optional OpenAlex evidence, then an LLM that must cite retrieved passages.
+Aaranya is a hybrid scientific assistant: internal RAG over ChromaDB, optional OpenAlex evidence, then an LLM that must stay within retrieved passages.
 
+```mermaid
+flowchart TD
+  user[User] --> ui[React Vite]
+  ui -->|VITE_API_URL or Vite /api proxy| api[FastAPI]
+  api --> extract[Extraction]
+  extract --> sqlite[SQLite memory]
+  sqlite --> retrieve[Chroma MiniLM plus BM25]
+  retrieve --> filter[Relevance threshold]
+  filter --> llm[Ollama]
+  filter --> openalex[Optional OpenAlex]
+  openalex --> llm
+  llm --> ground[Claim grounding]
+  ground --> ui
 ```
-USER
-  → FastAPI /api/chat
-  → environmental extraction + SQLite memory
-  → clarification if the site picture is incomplete
-  → context-aware query
-  → ChromaDB (all-MiniLM-L6-v2) + BM25 rerank
-  → relevance filter
-  → OpenAlex only if KB is weak/missing or the user asked for studies
-  → rank/filter external abstracts or open-access text
-  → LLM draft
-  → claim/evidence validation
-  → remove or rewrite unsupported claims
-  → grounded user-facing answer + separate source lists
-```
 
-The language model is a **local Ollama model** by default (`llama3.2:3b`). It is the author of the recommendation. The rule engine may suggest candidate interventions; it is not the final answer. OpenAI remains an optional paid provider behind `LLM_PROVIDER=openai`.
+Default LLM is local Ollama (`llama3.2:3b`). OpenAI/Groq/Anthropic remain optional via `LLM_PROVIDER` and the matching key. The rule engine may propose candidate interventions; the model authors the user-facing recommendation after grounding.
 
-Internal syntheses are labelled as Darukaa syntheses. They are not original FAO/IPBES papers.
+Production split:
+
+- Netlify serves the static React build only.
+- A Docker host runs FastAPI, Ollama, ChromaDB, SQLite, and the knowledge files.
+- `FRONTEND_ORIGIN` / `CORS_ORIGINS` must include the Netlify origin.
+- `VITE_API_URL` is the public FastAPI origin, baked in at Netlify build time.
+
+Internal syntheses are labelled as Darukaa/Aaranya syntheses. They are not original FAO/IPBES/IPCC publications.
+
+SQLite and Chroma are single-process stores. One API replica per data volume.
