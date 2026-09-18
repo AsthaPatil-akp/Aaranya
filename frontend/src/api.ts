@@ -148,7 +148,7 @@ export async function postChatStream(
 
 export async function searchLocations(query: string): Promise<{ label: string; latitude: number; longitude: number }[]> {
   const response = await fetch(`${API}/api/geocode?q=${encodeURIComponent(query)}`);
-  if (!response.ok) return [];
+  if (!response.ok) throw new Error(await readError(response, "Location search failed"));
   const rows = await response.json();
   return Array.isArray(rows) ? rows : [];
 }

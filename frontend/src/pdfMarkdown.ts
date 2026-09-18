@@ -17,7 +17,9 @@ const DUPLICATE_HEADING =
 export function normalizePdfText(text: string): string {
   return String(text || "")
     .replace(/\u00a0/g, " ")
+    .replace(/[\u2000-\u200A\u202F\u205F\u3000]/g, " ")
     .replace(/[\u200B-\u200D\uFEFF]/g, "")
+    .replace(/°/g, " deg")
     .replace(/[“”]/g, '"')
     .replace(/[‘’]/g, "'")
     .replace(/[–—]/g, "-")

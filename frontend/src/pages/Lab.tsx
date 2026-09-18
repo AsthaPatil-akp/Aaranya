@@ -103,7 +103,7 @@ export function Lab() {
   const [busy, setBusy] = useState(false);
   const [draft, setDraft] = useState("");
   const [error, setError] = useState<string | null>(null);
-  const [showDebug, setShowDebug] = useState(true);
+  const [showDebug, setShowDebug] = useState(false);
   const [copiedIndex, setCopiedIndex] = useState<number | null>(null);
   const chatLogRef = useRef<HTMLDivElement | null>(null);
 
@@ -139,7 +139,7 @@ export function Lab() {
           message: text,
           session_id: sessionId,
           structured,
-          debug: true,
+          debug: showDebug,
         },
         {
           onToken: (token) => {

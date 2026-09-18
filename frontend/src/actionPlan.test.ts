@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { buildActionPlan, planSections } from "./actionPlan";
-import { extractPdfCharSpaces, extractPdfText, renderActionPlanPdf } from "./actionPlanPdf";
+import { extractPdfCharSpaces, extractPdfText, extractPdfWordSpaces, renderActionPlanPdf } from "./actionPlanPdf";
 import { ChatResponse } from "./api";
 import { PDF_HEADING } from "./brand";
 import { EMPTY_LAND_DETAILS, LandDetails } from "./landDetails";
@@ -355,6 +355,8 @@ Local trials are still needed before promising a specific yield or species respo
     expect((text.match(/7\. Sources \/ Evidence/g) || []).length).toBe(1);
     expect((text.match(/9\. Uncertainty/g) || []).length).toBe(1);
     expect(extractPdfCharSpaces(doc).every((value) => value === 0)).toBe(true);
+    expect(extractPdfWordSpaces(doc).every((value) => value === 0)).toBe(true);
+    expect(text).not.toMatch(/C o v e r/);
   });
 
   it("normalizes inline ATX headings and keeps normal character spacing", () => {
@@ -427,5 +429,6 @@ Local trials are still needed before promising a specific yield or species respo
     expect(text).not.toMatch(/\|---/);
     expect(text).not.toMatch(/\|\s*Intervention\s*\|/);
     expect(extractPdfCharSpaces(doc).every((value) => value === 0)).toBe(true);
+    expect(extractPdfWordSpaces(doc).every((value) => value === 0)).toBe(true);
   });
 });

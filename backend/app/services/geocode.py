@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import logging
+import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import httpx
 
@@ -12,13 +14,38 @@ HEADERS = {
     "Accept": "application/json",
     "Accept-Language": "en",
 }
+PROVIDER_TIMEOUT = 3.5
+CACHE_TTL_SECONDS = 600.0
+_CACHE: dict[str, tuple[float, list[dict]]] = {}
 
 
 def search_places(query: str, limit: int = 5) -> list[dict]:
     text = (query or "").strip()
     if len(text) < 2:
         return []
-    return _nominatim(text, limit) or _photon(text, limit)
+    cache_key = f"{text.lower()}|{limit}"
+    cached = _CACHE.get(cache_key)
+    if cached and time.monotonic() - cached[0] < CACHE_TTL_SECONDS:
+        return cached[1]
+    rows: list[dict] = []
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        futures = [
+            pool.submit(_nominatim, text, limit),
+            pool.submit(_photon, text, limit),
+        ]
+        try:
+            for future in as_completed(futures, timeout=PROVIDER_TIMEOUT + 0.5):
+                try:
+                    found = future.result() or []
+                except Exception:
+                    found = []
+                if found:
+                    rows = found
+                    break
+        except Exception:
+            LOGGER.info("Geocode lookup timed out.", exc_info=True)
+    _CACHE[cache_key] = (time.monotonic(), rows)
+    return rows
 
 
 def _nominatim(query: str, limit: int) -> list[dict]:
@@ -27,7 +54,7 @@ def _nominatim(query: str, limit: int) -> list[dict]:
             "https://nominatim.openstreetmap.org/search",
             params={"q": query, "format": "json", "limit": limit, "addressdetails": 1},
             headers=HEADERS,
-            timeout=10.0,
+            timeout=PROVIDER_TIMEOUT,
         )
         if response.status_code >= 400:
             LOGGER.info("Nominatim returned %s; trying Photon.", response.status_code)
@@ -56,7 +83,7 @@ def _photon(query: str, limit: int) -> list[dict]:
             "https://photon.komoot.io/api/",
             params={"q": query, "limit": limit},
             headers=HEADERS,
-            timeout=10.0,
+            timeout=PROVIDER_TIMEOUT,
         )
         if response.status_code >= 400:
             return []

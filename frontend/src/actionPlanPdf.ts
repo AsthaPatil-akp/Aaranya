@@ -34,16 +34,29 @@ function wrap(doc: jsPDF, text: string, width = CONTENT_W): string[] {
   const source = normalizePdfText(String(text || "")).replace(/[ \t]+/g, " ").trim();
   if (!source) return [];
   const wrapped = doc.splitTextToSize(source, Math.max(20, width));
-  return asLines(wrapped)
+  const lines = asLines(wrapped)
     .map((line) => normalizePdfText(String(line)))
     .filter((line) => line.length > 0);
+  if (lines.length > 3 && lines.every((line) => line.length === 1)) {
+    const joined = lines.join("");
+    if (joined === source) return [joined];
+    return wrap(doc, joined, width);
+  }
+  return lines;
+}
+
+function writePdfOperators(doc: jsPDF, operators: string[]) {
+  const write = (doc.internal as { write?: (...parts: string[]) => void }).write;
+  if (typeof write !== "function") return;
+  for (const operator of operators) write.call(doc.internal, operator);
 }
 
 function resetTextState(doc: jsPDF) {
-  // jsPDF's text() uses `options.charSpace || currentCharSpace`. Passing
-  // `{ charSpace: 0 }` is falsy and re-applies a leaked Tc value. Reset the
-  // instance state instead, and never put charSpace on text() options.
+  // setCharSpace() only updates JS state; PDF Tc/Tw persist across BT/ET.
+  // Write the operators into the content stream so later text cannot inherit
+  // leaked letter- or word-spacing. Never pass charSpace into doc.text().
   doc.setCharSpace(0);
+  writePdfOperators(doc, ["0 Tc", "0 Tw"]);
 }
 
 function writeLine(doc: jsPDF, text: string, x: number, y: number) {
@@ -53,17 +66,22 @@ function writeLine(doc: jsPDF, text: string, x: number, y: number) {
   doc.text(line, x, y);
 }
 
+function writeRight(doc: jsPDF, text: string, rightX: number, y: number) {
+  const line = normalizePdfText(String(text ?? ""));
+  if (!line) return;
+  const width = (doc.getStringUnitWidth(line) * doc.getFontSize()) / doc.internal.scaleFactor;
+  writeLine(doc, line, rightX - width, y);
+}
+
 function addFooter(doc: jsPDF, page: number, total: number) {
   doc.setDrawColor(...RULE);
   doc.setLineWidth(0.3);
   doc.line(MARGIN, FOOTER_Y - 4, PAGE_W - MARGIN, FOOTER_Y - 4);
   doc.setFont("helvetica", "normal");
   doc.setFontSize(8);
-  resetTextState(doc);
   doc.setTextColor(...MUTED);
   writeLine(doc, "Grounded evidence only. Missing values are left blank.", MARGIN, FOOTER_Y);
-  resetTextState(doc);
-  doc.text(`${page} / ${total}`, PAGE_W - MARGIN, FOOTER_Y, { align: "right" });
+  writeRight(doc, `${page} / ${total}`, PAGE_W - MARGIN, FOOTER_Y);
 }
 
 export function extractPdfText(doc: jsPDF): string {
@@ -88,6 +106,11 @@ export function extractPdfCharSpaces(doc: jsPDF): number[] {
   return [...raw.matchAll(/([-+]?(?:\d+\.?\d*|\.\d+))\s+Tc/g)].map((match) => Number(match[1]));
 }
 
+export function extractPdfWordSpaces(doc: jsPDF): number[] {
+  const raw = new TextDecoder("latin1").decode(doc.output("arraybuffer"));
+  return [...raw.matchAll(/([-+]?(?:\d+\.?\d*|\.\d+))\s+Tw/g)].map((match) => Number(match[1]));
+}
+
 export function renderActionPlanPdf(plan: ActionPlanDocument): jsPDF {
   const doc = new jsPDF({ unit: "mm", format: "a4", orientation: "landscape" });
   resetTextState(doc);
@@ -98,6 +121,7 @@ export function renderActionPlanPdf(plan: ActionPlanDocument): jsPDF {
     if (y + needed <= BOTTOM) return;
     doc.addPage();
     y = 18;
+    resetTextState(doc);
   };
 
   const section = (title: string, minBody = 14) => {

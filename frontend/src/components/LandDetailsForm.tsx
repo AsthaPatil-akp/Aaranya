@@ -46,9 +46,19 @@ export function LandDetailsForm({ details, onChange, onClose, enableMap = true }
   queryRef.current = query;
   const mapExpandedRef = useRef(false);
   mapExpandedRef.current = mapExpanded;
+  const searchGeneration = useRef(0);
 
   function patch(partial: Partial<LandDetails>) {
     onChange({ ...detailsRef.current, ...partial });
+  }
+
+  function applyPlace(row: { label: string; latitude: number; longitude: number }, label = row.label) {
+    patch({
+      location: label,
+      latitude: String(row.latitude),
+      longitude: String(row.longitude),
+    });
+    setQuery(label);
   }
 
   function finish() {
@@ -81,33 +91,49 @@ export function LandDetailsForm({ details, onChange, onClose, enableMap = true }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  async function search(event?: FormEvent) {
+  async function search(event?: FormEvent, mode: "suggest" | "pin" = "suggest") {
     event?.preventDefault();
-    const text = query.trim();
+    const text = queryRef.current.trim();
     patch({ location: text });
     if (text.length < 2) {
       setResults([]);
       return;
     }
+    const generation = ++searchGeneration.current;
     setSearching(true);
     setSearchError(null);
     try {
       const rows = await searchLocations(text);
+      if (generation !== searchGeneration.current) return;
       setResults(rows);
-      if (!rows.length) setSearchError("No matching places. You can still click the map.");
+      if (!rows.length) {
+        setSearchError("No matching places. You can still click the map.");
+        return;
+      }
+      if (mode === "pin") {
+        applyPlace(rows[0]);
+        return;
+      }
+      patch({
+        location: text,
+        latitude: String(rows[0].latitude),
+        longitude: String(rows[0].longitude),
+      });
     } catch {
+      if (generation !== searchGeneration.current) return;
+      setResults([]);
       setSearchError("Location search is unavailable. Click the map or type coordinates.");
     } finally {
-      setSearching(false);
+      if (generation === searchGeneration.current) setSearching(false);
     }
   }
 
   useEffect(() => {
     const text = query.trim();
-    if (text.length < 3) return;
+    if (text.length < 2) return;
     const handle = window.setTimeout(() => {
-      void search();
-    }, 500);
+      void search(undefined, "suggest");
+    }, 400);
     return () => window.clearTimeout(handle);
     // Search after the user pauses so a full place name can be typed first.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -233,11 +259,11 @@ export function LandDetailsForm({ details, onChange, onClose, enableMap = true }
               onKeyDown={(event) => {
                 if (event.key === "Enter") {
                   event.preventDefault();
-                  void search();
+                  void search(undefined, "pin");
                 }
               }}
             />
-            <button className="btn ghost" type="button" onClick={() => void search()} disabled={searching}>
+            <button className="btn ghost" type="button" onClick={() => void search(undefined, "pin")} disabled={searching}>
               {searching ? "Searching…" : "Search"}
             </button>
           </div>
@@ -249,13 +275,9 @@ export function LandDetailsForm({ details, onChange, onClose, enableMap = true }
                   <button
                     type="button"
                     onClick={() => {
-                      patch({
-                        location: row.label,
-                        latitude: String(row.latitude),
-                        longitude: String(row.longitude),
-                      });
-                      setQuery(row.label);
+                      applyPlace(row);
                       setResults([]);
+                      setSearchError(null);
                     }}
                   >
                     {row.label}

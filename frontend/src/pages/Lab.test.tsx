@@ -219,7 +219,7 @@ describe("Intelligence Lab land details", () => {
     const payload = vi.mocked(postChatStream).mock.calls[0][0];
     expect(payload).toMatchObject({
       message: "Biodiversity is declining on my farm.",
-      debug: true,
+      debug: false,
     });
     expect(payload.structured).toBeUndefined();
   });

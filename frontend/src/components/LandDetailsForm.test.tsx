@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { useState } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { EMPTY_LAND_DETAILS, LandDetails } from "../landDetails";
@@ -69,6 +69,11 @@ describe("LandDetailsForm", () => {
     });
     fireEvent.click(screen.getByRole("button", { name: "Search" }));
     expect(await screen.findByRole("button", { name: "Pune, Maharashtra, India" })).toBeInTheDocument();
+    await waitFor(() => {
+      const stored = JSON.parse(screen.getByTestId("payload").textContent || "{}");
+      expect(stored.latitude).toBe("18.5204");
+      expect(stored.longitude).toBe("73.8567");
+    });
     fireEvent.click(screen.getByRole("button", { name: "Pune, Maharashtra, India" }));
     const stored = JSON.parse(screen.getByTestId("payload").textContent || "{}");
     expect(stored.location).toContain("Pune");
