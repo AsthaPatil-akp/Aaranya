@@ -27,11 +27,6 @@ Land managers often receive generic chatbot advice that sounds scientific but is
 9. Validate claims against retrieved passages; unsupported statements are not shown as facts.
 10. Return a grounded answer, recommendation block, and separate internal vs external source lists.
 
-## Links
-
-- GitHub: https://github.com/AsthaPatil-akp/Aaranya
-- Live Demo: [ADD AFTER NETLIFY DEPLOYMENT]
-- Backend: [ADD AFTER BACKEND DEPLOYMENT]
 
 No public frontend or API URL is claimed here because those hosts are not part of this repository.
 
