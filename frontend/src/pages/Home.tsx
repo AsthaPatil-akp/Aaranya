@@ -10,8 +10,6 @@ const PEOPLE =
   "https://images.unsplash.com/photo-1469474968028-56623f02e42e?auto=format&fit=crop&w=900&q=80";
 const TURTLE =
   "https://images.unsplash.com/photo-1437622368342-7a3d73a34c8f?auto=format&fit=crop&w=900&q=80";
-const FALLS =
-  "https://images.unsplash.com/photo-1432405976525-c0b3b2b6e3e0?auto=format&fit=crop&w=900&q=80";
 const FARM =
   "https://images.unsplash.com/photo-1500382017468-9049fed747ef?auto=format&fit=crop&w=900&q=80";
 
@@ -117,7 +115,7 @@ export function Home() {
             <p>Buffers, corridors and source control when species richness is already falling.</p>
           </article>
           <article className="photo-card">
-            <img src={FALLS} alt="Forest waterfall" />
+            <img src={FOREST} alt="Forest remnants" />
             <h3>Fragmented forests</h3>
             <p>Reconnect remnants instead of planting another monoculture.</p>
           </article>

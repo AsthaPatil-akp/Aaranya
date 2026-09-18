@@ -4,6 +4,7 @@ import { ingestFile, listKnowledge, rebuildKnowledge, searchKnowledge } from "..
 type Doc = {
   id: number;
   name: string;
+  title?: string | null;
   document_type: string;
   topic: string;
   source: string;
@@ -13,9 +14,10 @@ type Doc = {
 
 export function Knowledge() {
   const [docs, setDocs] = useState<Doc[]>([]);
-  const [query, setQuery] = useState("low soil organic carbon rainfall monoculture cover crops");
+  const [query, setQuery] = useState("low soil organic carbon rainfall cover crops");
   const [hits, setHits] = useState<any>(null);
   const [status, setStatus] = useState<string>("");
+  const [token, setToken] = useState(() => sessionStorage.getItem("darukaa_admin_token") || "");
 
   async function refresh() {
     setDocs(await listKnowledge());
@@ -25,14 +27,28 @@ export function Knowledge() {
     refresh().catch((err) => setStatus(String(err)));
   }, []);
 
+  function saveToken(value: string) {
+    setToken(value);
+    sessionStorage.setItem("darukaa_admin_token", value);
+  }
+
   return (
     <main className="section">
       <p className="kicker">Knowledge base</p>
       <h1>Documents become searchable after processing.</h1>
       <p className="lede">
-        PDFs and markdown reports are extracted, cleaned, chunked, embedded and stored with source, page, topic and
-        document type. Adding a new PDF here updates the vector index.
+        Reports are extracted, chunked, and stored with source metadata. Internal syntheses are not original FAO or IPBES papers.
+        Upload and rebuild require an admin token.
       </p>
+
+      <label className="tiny">Admin token (stored in this browser session only)</label>
+      <input
+        type="password"
+        value={token}
+        onChange={(event) => saveToken(event.target.value)}
+        placeholder="ADMIN_API_TOKEN"
+        style={{ marginBottom: 16, maxWidth: 360 }}
+      />
 
       <div className="pill-row" style={{ marginBottom: 24 }}>
         <label className="btn primary">
@@ -58,8 +74,13 @@ export function Knowledge() {
         <button
           className="btn ghost"
           onClick={async () => {
-            const result = await rebuildKnowledge();
-            setStatus(`Rebuilt vectors for ${result.documents_processed} documents.`);
+            setStatus("Rebuilding…");
+            try {
+              const result = await rebuildKnowledge();
+              setStatus(`Rebuilt vectors for ${result.documents_processed} documents.`);
+            } catch (err) {
+              setStatus(err instanceof Error ? err.message : "Rebuild failed");
+            }
           }}
         >
           Rebuild vectors
@@ -81,7 +102,7 @@ export function Knowledge() {
           <tbody>
             {docs.map((doc) => (
               <tr key={doc.id}>
-                <td>{doc.name}</td>
+                <td>{doc.title || doc.name}</td>
                 <td>{doc.document_type}</td>
                 <td>{doc.topic}</td>
                 <td>{doc.pages}</td>
@@ -98,7 +119,13 @@ export function Knowledge() {
           <input value={query} onChange={(event) => setQuery(event.target.value)} />
           <button
             className="btn primary"
-            onClick={async () => setHits(await searchKnowledge(query))}
+            onClick={async () => {
+              try {
+                setHits(await searchKnowledge(query));
+              } catch (err) {
+                setStatus(err instanceof Error ? err.message : "Search failed");
+              }
+            }}
           >
             Search
           </button>

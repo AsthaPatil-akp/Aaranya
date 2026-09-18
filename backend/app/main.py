@@ -9,8 +9,12 @@ from fastapi.staticfiles import StaticFiles
 
 from app.api.routes import router
 from app.core.config import get_settings
+from app.services.embeddings import get_embedder
 from app.services.ingest import knowledge_store
+from app.services.llm import warm_ollama
 from app.services.memory import init_db
+from app.services.retrieval import retriever
+from app.services.vectorstore import get_chroma
 
 settings = get_settings()
 
@@ -18,9 +22,20 @@ settings = get_settings()
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     init_db()
+    get_embedder()
     docs, chunks = knowledge_store.stats()
-    if chunks == 0:
+    try:
+        vectors = get_chroma().count()
+    except Exception:
+        vectors = 0
+    if chunks == 0 or vectors == 0:
         knowledge_store.ingest_directory()
+    try:
+        retriever.warmup()
+    except Exception:
+        pass
+    if settings.app_env != "test":
+        warm_ollama()
     yield
 
 

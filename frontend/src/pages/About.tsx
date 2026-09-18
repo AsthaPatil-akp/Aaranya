@@ -2,37 +2,31 @@ export function About() {
   return (
     <main className="section">
       <p className="kicker">Architecture</p>
-      <h1>Not a generic chatbot.</h1>
+      <h1>Evidence first, then a conversation.</h1>
       <p className="lede">
-        User input is parsed for environmental variables, merged into conversation memory, checked for missing data,
-        searched against a vector index, filtered by relevance, then passed to a multi-metric reasoning layer.
+        The assistant searches an internal scientific knowledge base, adds external papers only when needed, and asks a
+        language model to reason over that evidence. It will not invent citations.
       </p>
       <div className="panel">
-        <pre className="debug">{`USER
-  → CHAT / STRUCTURED INPUT
-  → VARIABLE EXTRACTION
-  → CONVERSATION MEMORY
-  → MISSING DATA CHECK
-        ↙                 ↘
-  Clarifying questions    RAG retrieval
-                              → relevance check
-                                ↙            ↘
-                          Grounded RAG     Fallback (OpenAlex or honest refusal)
-                                ↘            ↙
-                          MULTI-METRIC REASONING
-                          → recommendation, metrics, time horizon, confidence, sources`}</pre>
+        <pre className="debug">{`YOU DESCRIBE THE LAND
+  → we remember your site variables
+  → we search the knowledge base
+  → if that is weak or you asked for studies, we search scientific literature
+  → a language model reads the passages
+  → you get a plain-language recommendation and separate source lists`}</pre>
       </div>
       <div className="split" style={{ marginTop: 28 }}>
         <div>
-          <h3>What the model is allowed to do</h3>
-          <p>Polish explanations when an optional LLM key is present.</p>
-          <p>Never invent papers, authors, percentages, or page numbers.</p>
-          <p>Never present general model memory as knowledge-base evidence.</p>
+          <h3>What you should see</h3>
+          <p>A natural answer, a specific recommendation, and why it may help.</p>
+          <p>Knowledge-base sources and external papers kept apart.</p>
+          <p>Uncertainty when the evidence is thin or only an abstract was available.</p>
         </div>
         <div>
-          <h3>How to grow the science</h3>
-          <p>Drop a PDF into the Knowledge page or run <code>python scripts/kb.py ingest path/to/file.pdf</code>.</p>
-          <p>Rebuild vectors after bulk changes. Spatial fields (lat/lon/region) are already in the data model.</p>
+          <h3>What it will not do</h3>
+          <p>Invent percentages, DOIs, or page numbers.</p>
+          <p>Call an internal synthesis an original FAO or IPBES report.</p>
+          <p>Search the entire internet for every ordinary follow-up.</p>
         </div>
       </div>
     </main>

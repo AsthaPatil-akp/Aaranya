@@ -11,6 +11,16 @@ from app.models.schemas import (
     TimeHorizon,
 )
 
+from app.services.fallback import wants_recent_literature
+
+
+RESEARCH_LOOKUP = re.compile(
+    r"\b(latest|recent studies|new findings|current evidence|peer[- ]reviewed|"
+    r"scientific literature|research papers?|published studies|look up (?:papers|research)|"
+    r"what does recent research)\b",
+    re.I,
+)
+
 INTENT_KEYWORDS = {
     "biodiversity": ["biodiversity", "species", "pollinator", "habitat", "wildlife"],
     "soil": ["soil", "carbon", "ph", "organic", "erosion"],
@@ -70,7 +80,23 @@ def missing_variables(context: EnvironmentalContext, intent: str) -> list[tuple[
     return missing
 
 
+def is_knowledge_lookup(message: str) -> bool:
+    text = (message or "").lower()
+    return bool(
+        re.search(
+            r"according to the knowledge base|what habitat requirement|what does the (document|report|knowledge base)|in the indexed document",
+            text,
+        )
+    )
+
+
+def is_research_lookup(message: str) -> bool:
+    return wants_recent_literature(message) or bool(RESEARCH_LOOKUP.search(message or ""))
+
+
 def needs_clarification(context: EnvironmentalContext, intent: str, message: str) -> bool:
+    if is_knowledge_lookup(message) or is_research_lookup(message):
+        return False
     known = context.known_variables()
     core_keys = {
         "soil_organic_carbon",
@@ -87,18 +113,20 @@ def needs_clarification(context: EnvironmentalContext, intent: str, message: str
         "deforestation",
         "species_richness",
         "plant_diversity",
+        "pollinator_diversity",
+        "water_availability",
     }
     present_core = [key for key in known if key in core_keys]
     if len(present_core) >= 3:
         return False
     text = (message or "").lower()
-    if re.search(r"\b(recommend|intervene)\b|what should i do|how do i restore", text):
+    if re.search(r"\b(recommend|intervene)\b|what should i do|how do i restore|what can i do", text):
         return len(present_core) < 3
     if re.search(r"\b(declin\w*|degrad\w*|problem|losing|poor|stress)\b", text):
         return True
-    if intent == "general" and len(present_core) == 0:
+    if len(present_core) == 0 and intent == "general":
         return False
-    return len(present_core) < 2 and intent != "general"
+    return len(present_core) < 2
 
 
 def clarifying_questions(context: EnvironmentalContext, intent: str) -> list[str]:
@@ -224,9 +252,15 @@ def describe_relationships(context: EnvironmentalContext) -> tuple[str, list[str
         )
     if context.human_impact.pollution:
         used.append("pollution")
-        parts.append(
-            f"Pollution is {context.human_impact.pollution}, adding chemical stress that can reduce sensitive taxa and soil biological function."
-        )
+        if "pesticide" in str(context.human_impact.pollution).lower():
+            parts.append(
+                "Pesticide use was mentioned and can place additional pressure on insects and soil life; "
+                "this should be investigated rather than treated as a proven single cause."
+            )
+        else:
+            parts.append(
+                f"Pollution is {context.human_impact.pollution}, adding chemical stress that can reduce sensitive taxa and soil biological function."
+            )
     if context.human_impact.deforestation or context.land.fragmentation:
         used.append("habitat fragmentation")
         parts.append(
@@ -316,10 +350,18 @@ def select_intervention(context: EnvironmentalContext) -> dict[str, Any]:
         }
     if soc_low and rain_low and (mono or context.land.crop):
         crop = context.land.crop or "the current staple"
+        system = f"{crop} monoculture" if mono else f"{crop} system"
         return {
             "id": "covercrop_agroforestry",
-            "action": f"Shift {crop} monoculture toward a diversified rotation with drought-tolerant cover crops, plus widely spaced native trees or shrubs (agroforestry strips) on contours to hold soil and water.",
-            "why": "Low soil organic carbon, low rainfall, and monoculture interact: little residue means weak aggregation and poor infiltration, so scarce rain is lost, roots and soil biota decline, and habitat is uniformly simple. Cover crops add living roots and residue; agroforestry adds shade, litter, and structural habitat.",
+            "action": (
+                f"In this {system}, shift toward a diversified rotation with drought-tolerant cover crops, "
+                "plus widely spaced native trees or shrubs along contours where water allows."
+            ),
+            "why": (
+                "Low soil organic carbon and low rainfall interact: little residue means weak aggregation and poor infiltration, "
+                "so scarce rain is lost and habitat stays simple. Cover crops add living roots and residue; "
+                "trees or shrubs add shade and structure if they are suited to the site."
+            ),
             "keywords": ["cover crop", "agroforestry", "organic carbon", "rainfall", "monoculture", "intercrop"],
             "metrics": [
                 ImpactedMetric(name="Soil organic carbon", direction="up"),
@@ -439,13 +481,66 @@ def retrieval_query(
     message: str,
     context: EnvironmentalContext,
     include_intervention: bool = False,
-    include_context: bool = False,
+    include_context: bool = True,
 ) -> str:
-    bits = [message]
+    bits: list[str] = []
     known = context.known_variables()
-    if include_context:
-        bits.extend(f"{k} {v}" for k, v in known.items() if k != "notes")
+    if include_context and known:
+        bits.append(
+            ", ".join(f"{key.replace('_', ' ')} {value}" for key, value in known.items() if key != "notes")
+        )
+        bits.append("biodiversity environmental management recommendations")
+    if message and not re.fullmatch(r"what should i do\??", message.strip(), re.I):
+        bits.append(message)
+    elif not known:
+        bits.append(message)
     if include_intervention and len(known) >= 3:
         intervention = select_intervention(context)
         bits.append(" ".join(intervention["keywords"]))
     return " ".join(str(bit) for bit in bits if bit)
+
+
+def candidate_payload(context: EnvironmentalContext) -> list[dict]:
+    item = select_intervention(context)
+    ideas = [
+        {
+            "id": item["id"],
+            "idea": item["action"],
+            "why_candidate": item["why"],
+            "keywords": item["keywords"],
+        }
+    ]
+    if item["id"] == "covercrop_agroforestry":
+        ideas = [
+            {
+                "id": "cover_crops",
+                "idea": "Drought-tolerant cover crops matched to the rainfall window, keeping residue on the soil.",
+                "why_candidate": "Low organic carbon and low moisture are coupled; living roots and residue can support aggregation and some habitat if the species fit the dry season.",
+                "keywords": ["cover crop", "residue", "organic carbon", "soil moisture"],
+            },
+            {
+                "id": "native_trees_shrubs",
+                "idea": "Widely spaced native trees or shrubs where water allows, rather than a dense plantation.",
+                "why_candidate": "Woody structure can add shade and habitat in simplified wheat landscapes, but spacing matters in a semi-arid climate.",
+                "keywords": ["agroforestry", "native shrubs", "habitat"],
+            },
+        ]
+    if _is_low(context.biodiversity.plant_diversity) or _is_low(context.biodiversity.habitat_diversity):
+        ideas.append(
+            {
+                "id": "flowering_habitat",
+                "idea": "Keep or restore flowering field margins or native floral strips that are not sprayed.",
+                "why_candidate": "Few flowering plants mean a short or empty floral calendar for bees and butterflies; margins can add resources without converting the whole field.",
+                "keywords": ["flowering", "pollinator", "field margin"],
+            }
+        )
+    if context.human_impact.pollution and "pesticide" in str(context.human_impact.pollution).lower():
+        ideas.append(
+            {
+                "id": "pesticide_review",
+                "idea": "Review pesticide timing, drift and unsprayed refuges during the growing season.",
+                "why_candidate": "Agrochemical use can place additional pressure on insects. Investigate it as a contributing stress, not as a proven sole cause unless evidence says so.",
+                "keywords": ["pesticide", "agrochemical", "pollinator"],
+            }
+        )
+    return ideas

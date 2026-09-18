@@ -7,26 +7,30 @@ from pydantic import BaseModel, Field, field_validator
 
 KnowledgeStatus = Literal[
     "grounded_in_knowledge_base",
-    "partially_grounded_external_used",
-    "insufficient_verified_evidence",
+    "grounded_in_external_evidence",
+    "grounded_in_kb_and_external",
+    "insufficient_evidence",
     "awaiting_clarification",
 ]
 
 ConfidenceLevel = Literal["high", "medium", "low"]
 MetricDirection = Literal["up", "down", "neutral", "unknown"]
 EvidenceOrigin = Literal["knowledge_base", "external_openalex", "unused_low_relevance"]
+EvidenceLevel = Literal["full_text", "abstract", "passage", "metadata"]
+ClaimSupport = Literal["direct", "inference", "unsupported"]
 
 
 class LocationContext(BaseModel):
     region: Optional[str] = None
     location: Optional[str] = None
+    farm_size: Optional[str] = None
     latitude: Optional[float] = None
     longitude: Optional[float] = None
 
 
 class SoilContext(BaseModel):
     ph: Optional[float] = None
-    organic_carbon: Optional[float] = None  # percent
+    organic_carbon: Optional[float] = None
     organic_carbon_label: Optional[str] = None
     moisture: Optional[str] = None
 
@@ -46,6 +50,7 @@ class BiodiversityContext(BaseModel):
     pollinator_diversity: Optional[str] = None
     microbial_diversity: Optional[str] = None
     species_survival: Optional[str] = None
+    observations: Optional[str] = None
 
 
 class ClimateContext(BaseModel):
@@ -80,6 +85,7 @@ class EnvironmentalContext(BaseModel):
         mapping = {
             "region": self.location.region,
             "location": self.location.location,
+            "farm_size": self.location.farm_size,
             "latitude": self.location.latitude,
             "longitude": self.location.longitude,
             "soil_ph": self.soil.ph,
@@ -97,6 +103,7 @@ class EnvironmentalContext(BaseModel):
             "pollinator_diversity": self.biodiversity.pollinator_diversity,
             "microbial_diversity": self.biodiversity.microbial_diversity,
             "species_survival": self.biodiversity.species_survival,
+            "biodiversity_observations": self.biodiversity.observations,
             "temperature": self.climate.temperature,
             "rainfall": self.climate.rainfall,
             "drought": self.climate.drought,
@@ -116,6 +123,7 @@ class EnvironmentalContext(BaseModel):
 class StructuredInput(BaseModel):
     region: Optional[str] = None
     location: Optional[str] = None
+    farm_size: Optional[str] = None
     latitude: Optional[float] = None
     longitude: Optional[float] = None
     soil_ph: Optional[float] = Field(default=None, ge=0, le=14)
@@ -139,8 +147,17 @@ class StructuredInput(BaseModel):
     plant_diversity: Optional[str] = None
     pollinator_diversity: Optional[str] = None
     microbial_diversity: Optional[str] = None
+    biodiversity_observations: Optional[str] = None
 
-    @field_validator("soil_moisture", "rainfall", "pollution", "drought", "fragmentation", mode="before")
+    @field_validator(
+        "soil_moisture",
+        "rainfall",
+        "pollution",
+        "drought",
+        "fragmentation",
+        "water_availability",
+        mode="before",
+    )
     @classmethod
     def normalize_ordinal(cls, value: Any) -> Any:
         if isinstance(value, str):
@@ -157,16 +174,32 @@ class ChatRequest(BaseModel):
 
 
 class EvidenceItem(BaseModel):
+    evidence_id: str = ""
     source: str
     document_name: str
+    title: Optional[str] = None
+    authors: Optional[str] = None
+    institution: Optional[str] = None
     page: Optional[int] = None
+    page_is_real: bool = False
     topic: Optional[str] = None
     document_type: Optional[str] = None
     passage: str
     relevance_score: Optional[float] = None
     origin: EvidenceOrigin = "knowledge_base"
+    evidence_level: EvidenceLevel = "passage"
     doi: Optional[str] = None
+    url: Optional[str] = None
     year: Optional[int] = None
+    cited_by_count: Optional[int] = None
+
+
+class ClaimEvidenceLink(BaseModel):
+    claim_id: str
+    text: str
+    evidence_ids: list[str] = Field(default_factory=list)
+    support: ClaimSupport = "direct"
+    sources: list[str] = Field(default_factory=list)
 
 
 class ImpactedMetric(BaseModel):
@@ -179,6 +212,7 @@ class TimeHorizon(BaseModel):
     short_term: Optional[str] = None
     medium_term: Optional[str] = None
     long_term: Optional[str] = None
+    narrative: Optional[str] = None
     evidence_supported: bool = False
 
 
@@ -189,7 +223,7 @@ class HeuristicProfile(BaseModel):
     biodiversity_pressure: str
     human_impact: str
     disclaimer: str = (
-        "These scores are AI-derived heuristic assessments based on available inputs, "
+        "These scores are heuristic readings of the inputs you provided, "
         "not scientifically validated predictions."
     )
 
@@ -200,17 +234,52 @@ class RecommendationBlock(BaseModel):
     environmental_relationships: str
     impacted_metrics: list[ImpactedMetric] = Field(default_factory=list)
     time_horizon: TimeHorizon = Field(default_factory=TimeHorizon)
+    uncertainty: Optional[str] = None
     confidence: ConfidenceLevel = "low"
     confidence_rationale: str = ""
 
 
+class SearchRequest(BaseModel):
+    query: str = Field(min_length=1)
+
+
 class DebugRetrieval(BaseModel):
+    original_query: str = ""
     query: str
+    context_aware_query: str = ""
     retrieved: list[EvidenceItem] = Field(default_factory=list)
     accepted: list[EvidenceItem] = Field(default_factory=list)
     rejected: list[EvidenceItem] = Field(default_factory=list)
     threshold: float
     backend: str
+    embedding_model: str = ""
+    embedding_dimension: int = 0
+    vector_database: str = ""
+    collection: str = ""
+    llm_provider: str = ""
+    llm_model: str = ""
+    llm_configured: bool = False
+    llm_available: bool = False
+    llm_raw_response: Optional[str] = None
+    conversation_context_used: bool = False
+    retrieved_context_passed_to_llm: bool = False
+    external_search_triggered: bool = False
+    external_search_reason: Optional[str] = None
+    external_retrieved: list[EvidenceItem] = Field(default_factory=list)
+    evidence_selected_for_llm: list[str] = Field(default_factory=list)
+    llm_prompt: Optional[str] = None
+    claims: list[ClaimEvidenceLink] = Field(default_factory=list)
+    knowledge_status: Optional[str] = None
+    environment_extraction_ms: Optional[float] = None
+    memory_ms: Optional[float] = None
+    chroma_retrieval_ms: Optional[float] = None
+    openalex_ms: Optional[float] = None
+    evidence_selection_ms: Optional[float] = None
+    prompt_build_ms: Optional[float] = None
+    llm_first_token_ms: Optional[float] = None
+    llm_total_ms: Optional[float] = None
+    grounding_ms: Optional[float] = None
+    total_request_ms: Optional[float] = None
 
 
 class ChatResponse(BaseModel):
@@ -223,8 +292,12 @@ class ChatResponse(BaseModel):
     profile: Optional[HeuristicProfile] = None
     recommendation: Optional[RecommendationBlock] = None
     evidence: list[EvidenceItem] = Field(default_factory=list)
+    kb_evidence: list[EvidenceItem] = Field(default_factory=list)
+    external_evidence: list[EvidenceItem] = Field(default_factory=list)
     knowledge_status: KnowledgeStatus = "awaiting_clarification"
     knowledge_status_label: str = ""
+    source_types: list[str] = Field(default_factory=list)
+    claims: list[ClaimEvidenceLink] = Field(default_factory=list)
     debug: Optional[DebugRetrieval] = None
     warnings: list[str] = Field(default_factory=list)
     error: Optional[str] = None
@@ -241,11 +314,16 @@ class IngestResponse(BaseModel):
 class DocumentInfo(BaseModel):
     id: int
     name: str
+    title: Optional[str] = None
     document_type: str
     topic: str
     source: str
     pages: int
     chunks: int
+    year: Optional[int] = None
+    doi: Optional[str] = None
+    url: Optional[str] = None
+    origin: Optional[str] = None
 
 
 class HealthResponse(BaseModel):
@@ -254,5 +332,13 @@ class HealthResponse(BaseModel):
     documents: int
     chunks: int
     embedding_backend: str
+    embedding_model: str
+    embedding_dimension: int
+    vector_database: str
+    collection: str
+    vector_count: int
     llm_provider: str
+    llm_model: str
+    llm_configured: bool
+    llm_available: bool
     openalex_enabled: bool

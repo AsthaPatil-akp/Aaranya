@@ -1,4 +1,4 @@
-import { Navigate, Route, Routes } from "react-router-dom";
+import { Navigate, Route, Routes, useLocation } from "react-router-dom";
 import { Nav } from "./components/Nav";
 import { Footer } from "./components/Footer";
 import { Home } from "./pages/Home";
@@ -7,8 +7,10 @@ import { Knowledge } from "./pages/Knowledge";
 import { About } from "./pages/About";
 
 export default function App() {
+  const { pathname } = useLocation();
+  const labMode = pathname === "/lab";
   return (
-    <div className="app-shell">
+    <div className={`app-shell${labMode ? " lab-mode" : ""}`}>
       <Nav />
       <Routes>
         <Route path="/" element={<Home />} />
@@ -17,7 +19,7 @@ export default function App() {
         <Route path="/about" element={<About />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
-      <Footer />
+      {!labMode && <Footer />}
     </div>
   );
 }

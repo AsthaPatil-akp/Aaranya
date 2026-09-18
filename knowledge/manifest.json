@@ -1,0 +1,72 @@
+{
+  "01_soil_organic_carbon_biodiversity.md": {
+    "title": "Soil Organic Carbon, Soil pH, Moisture and Below-Ground Biodiversity",
+    "source_type": "darukaa_synthesis",
+    "organization": "Darukaa.Earth",
+    "year": 2026,
+    "origin": "knowledge_base",
+    "url": "https://www.fao.org/soils-portal/en/",
+    "topic": "soil_health"
+  },
+  "02_rainfall_drought_species_survival.md": {
+    "title": "Rainfall, Drought and Species Survival",
+    "source_type": "darukaa_synthesis",
+    "organization": "Darukaa.Earth",
+    "year": 2026,
+    "origin": "knowledge_base",
+    "url": "https://www.ipbes.net/",
+    "topic": "climate"
+  },
+  "03_monoculture_agroforestry_habitat.md": {
+    "title": "Monoculture, Agroforestry and Habitat Complexity",
+    "source_type": "darukaa_synthesis",
+    "organization": "Darukaa.Earth",
+    "year": 2026,
+    "origin": "knowledge_base",
+    "topic": "land_use"
+  },
+  "04_cover_crops_semiarid_water.md": {
+    "title": "Cover Crops, Residue Retention and Water-Holding Capacity in Semi-Arid Farming",
+    "source_type": "darukaa_synthesis",
+    "organization": "Darukaa.Earth",
+    "year": 2026,
+    "origin": "knowledge_base",
+    "url": "https://www.nrcs.usda.gov/conservation-basics/natural-resource-concerns/soils/soil-health",
+    "topic": "soil_health"
+  },
+  "05_pollution_urban_species_richness.md": {
+    "title": "Pollution, Urban Expansion and Species Richness",
+    "source_type": "darukaa_synthesis",
+    "organization": "Darukaa.Earth",
+    "year": 2026,
+    "origin": "knowledge_base",
+    "url": "https://www.cbd.int/",
+    "topic": "human_impact"
+  },
+  "06_temperature_drought_vegetation.md": {
+    "title": "Temperature, Drought and Vegetation Stress",
+    "source_type": "darukaa_synthesis",
+    "organization": "Darukaa.Earth",
+    "year": 2026,
+    "origin": "knowledge_base",
+    "topic": "climate"
+  },
+  "07_deforestation_fragmentation_biodiversity.md": {
+    "title": "Deforestation, Fragmentation and Biodiversity",
+    "source_type": "darukaa_synthesis",
+    "organization": "Darukaa.Earth",
+    "year": 2026,
+    "origin": "knowledge_base",
+    "url": "https://www.ipbes.net/",
+    "topic": "land_use"
+  },
+  "08_land_use_change_cover.md": {
+    "title": "Land-Use Change, Grasslands, Forests and Agricultural Conversion",
+    "source_type": "darukaa_synthesis",
+    "organization": "Darukaa.Earth",
+    "year": 2026,
+    "origin": "knowledge_base",
+    "url": "https://www.fao.org/land-water/land/en/",
+    "topic": "land_use"
+  }
+}
