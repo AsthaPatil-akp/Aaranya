@@ -1,6 +1,9 @@
 # Aaranya — AI Biodiversity Intelligence
 
+
+Deployment Link : https://aaranyapp.netlify.app/lab
 Repository: https://github.com/AsthaPatil-akp/Aaranya
+
 
 Aaranya is an evidence-grounded conversational system for land, soil, climate, and biodiversity questions. It behaves like an environmental analyst: it extracts what is known about a site, retrieves passages from a local knowledge base, optionally adds OpenAlex literature, then asks a local LLM to explain only what that evidence supports.
 
