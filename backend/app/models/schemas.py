@@ -132,7 +132,7 @@ class StructuredInput(BaseModel):
     soil_organic_carbon: Optional[float] = Field(default=None, ge=0, le=20)
     soil_moisture: Optional[str] = None
     rainfall: Optional[str] = None
-    temperature: Optional[float] = Field(default=None, ge=-40, le=60)
+    temperature: Optional[float] = Field(default=None, ge=-40, le=80)
     crop: Optional[str] = None
     land_use: Optional[str] = None
     land_cover: Optional[str] = None

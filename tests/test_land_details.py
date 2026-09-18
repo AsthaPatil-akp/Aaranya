@@ -1,4 +1,6 @@
+import pytest
 from fastapi.testclient import TestClient
+from pydantic import ValidationError
 
 from app.main import app
 from app.models.schemas import ChatRequest, LandContext, StructuredInput
@@ -188,3 +190,42 @@ def test_geocode_short_query_is_empty():
     response = client.get("/api/geocode", params={"q": "a"})
     assert response.status_code == 200
     assert response.json() == []
+
+
+@pytest.mark.parametrize("value", [60, 65, 80])
+def test_structured_temperature_accepts_environmental_range(value):
+    parsed = StructuredInput(temperature=value)
+    assert parsed.temperature == value
+
+
+def test_structured_temperature_rejects_above_80():
+    with pytest.raises(ValidationError) as exc:
+        StructuredInput(temperature=80.1)
+    assert "less_than_equal" in str(exc.value)
+    assert "80" in str(exc.value)
+
+
+def test_chat_accepts_temperature_65():
+    response = client.post(
+        "/api/chat",
+        json={
+            "message": "Biodiversity is declining on my farm.",
+            "structured": {"temperature": 65},
+        },
+    )
+    assert response.status_code == 200
+    assert response.json()["known_variables"]["temperature"] == 65
+
+
+def test_chat_rejects_temperature_above_80():
+    response = client.post(
+        "/api/chat",
+        json={
+            "message": "Biodiversity is declining on my farm.",
+            "structured": {"temperature": 81},
+        },
+    )
+    assert response.status_code == 422
+    detail = response.json()["detail"]
+    assert detail[0]["loc"] == ["body", "structured", "temperature"]
+    assert detail[0]["type"] == "less_than_equal"

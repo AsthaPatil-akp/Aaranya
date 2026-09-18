@@ -6,6 +6,8 @@ import {
   LandDetails,
   LEVEL_OPTIONS,
   PESTICIDE_OPTIONS,
+  TEMPERATURE_MAX_C,
+  TEMPERATURE_MIN_C,
 } from "../landDetails";
 import { LocationPicker } from "./LocationPicker";
 
@@ -192,7 +194,16 @@ export function LandDetailsForm({ details, onChange, onClose, enableMap = true }
             </select>
           </Field>
           <Field label="Temperature">
-            <input inputMode="decimal" value={details.temperature} onChange={(event) => patch({ temperature: event.target.value })} placeholder="°C" />
+            <input
+              type="number"
+              inputMode="decimal"
+              min={TEMPERATURE_MIN_C}
+              max={TEMPERATURE_MAX_C}
+              step="any"
+              value={details.temperature}
+              onChange={(event) => patch({ temperature: event.target.value })}
+              placeholder="°C"
+            />
           </Field>
           <Field label="Pesticide use">
             <select value={details.pesticide_use} onChange={(event) => patch({ pesticide_use: event.target.value })}>

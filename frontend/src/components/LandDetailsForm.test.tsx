@@ -88,6 +88,15 @@ describe("LandDetailsForm", () => {
     expect(screen.getByTestId("land-map-stage")).not.toHaveClass("expanded");
   });
 
+  it("accepts temperatures above 60°C within the 80°C environmental limit", () => {
+    render(<Harness />);
+    const input = screen.getByPlaceholderText("°C");
+    expect(input).toHaveAttribute("min", "-40");
+    expect(input).toHaveAttribute("max", "80");
+    fireEvent.change(input, { target: { value: "65" } });
+    expect(JSON.parse(screen.getByTestId("payload").textContent || "{}").temperature).toBe("65");
+  });
+
   it("closes when requested", () => {
     const onClose = vi.fn();
     render(<Harness onClose={onClose} />);

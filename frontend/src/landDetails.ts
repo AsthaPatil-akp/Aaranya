@@ -45,6 +45,13 @@ export const LEVEL_OPTIONS = ["", "low", "moderate", "high"];
 
 export const PESTICIDE_OPTIONS = ["", "none", "low", "moderate", "high", "pesticide use"];
 
+export const TEMPERATURE_MIN_C = -40;
+export const TEMPERATURE_MAX_C = 80;
+
+export function isValidTemperatureC(value: number): boolean {
+  return Number.isFinite(value) && value >= TEMPERATURE_MIN_C && value <= TEMPERATURE_MAX_C;
+}
+
 const CHIP_LABELS: Record<keyof LandDetails, string> = {
   farm_size: "Farm size",
   location: "Location",
@@ -143,5 +150,9 @@ export function mergeStructuredSources(
     fromJson = parsed as Record<string, unknown>;
   }
   const combined = { ...fromJson, ...fromForm };
+  const temperature = combined.temperature;
+  if (typeof temperature === "number" && !isValidTemperatureC(temperature)) {
+    throw new Error(`Temperature must be between ${TEMPERATURE_MIN_C} and ${TEMPERATURE_MAX_C} °C.`);
+  }
   return Object.keys(combined).length ? combined : undefined;
 }

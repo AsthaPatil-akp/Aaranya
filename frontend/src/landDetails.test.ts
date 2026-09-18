@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
   EMPTY_LAND_DETAILS,
+  TEMPERATURE_MAX_C,
+  TEMPERATURE_MIN_C,
   clearLandField,
+  isValidTemperatureC,
   landDetailChips,
   mergeStructuredSources,
   toStructuredPayload,
@@ -66,5 +69,26 @@ describe("optional land details payload", () => {
       latitude: 12.9,
       longitude: 77.6,
     });
+  });
+
+  it("accepts environmental temperatures up to 80°C", () => {
+    expect(TEMPERATURE_MIN_C).toBe(-40);
+    expect(TEMPERATURE_MAX_C).toBe(80);
+    expect(isValidTemperatureC(60)).toBe(true);
+    expect(isValidTemperatureC(65)).toBe(true);
+    expect(isValidTemperatureC(80)).toBe(true);
+    expect(isValidTemperatureC(80.1)).toBe(false);
+    expect(toStructuredPayload({ ...EMPTY_LAND_DETAILS, temperature: "65" }).temperature).toBe(65);
+    expect(toStructuredPayload({ ...EMPTY_LAND_DETAILS, temperature: "60" }).temperature).toBe(60);
+    expect(toStructuredPayload({ ...EMPTY_LAND_DETAILS, temperature: "80" }).temperature).toBe(80);
+    expect(mergeStructuredSources({ ...EMPTY_LAND_DETAILS, temperature: "65" }, "")).toMatchObject({
+      temperature: 65,
+    });
+    expect(mergeStructuredSources({ ...EMPTY_LAND_DETAILS, temperature: "80" }, "")).toMatchObject({
+      temperature: 80,
+    });
+    expect(() => mergeStructuredSources({ ...EMPTY_LAND_DETAILS, temperature: "81" }, "")).toThrow(
+      /80/,
+    );
   });
 });
