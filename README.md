@@ -390,6 +390,7 @@ Placeholders only:
 | `GROQ_MODEL` | Default `llama-3.1-8b-instant` |
 | `OPENAI_API_KEY` | Optional paid hosted provider |
 | `DATA_DIR` / `SQLITE_PATH` / `CHROMA_PATH` | Runtime stores |
+| `RETRIEVAL_BACKEND` | `hybrid` locally (MiniLM+Chroma); `bm25` on Render Free |
 | `KNOWLEDGE_DIR` / `SOURCE_DIR` / `PDF_DIR` | Knowledge files |
 | `ADMIN_API_TOKEN` | `your-long-random-admin-token-here` |
 | `CORS_ORIGINS` | Comma-separated browser origins |
@@ -453,13 +454,13 @@ Local live chat uses Ollama. Render Free cannot run Ollama. Production uses the 
 3. Build: `pip install -r backend/requirements.txt`
 4. Start: `uvicorn app.main:app --host 0.0.0.0 --port $PORT`
 5. Set `PYTHONPATH=backend`.
-6. Set backend env vars (see below). Put `GROQ_API_KEY` only on Render, never in Netlify/`VITE_*`.
+6. Set backend env vars (see below). Put `GROQ_API_KEY` only on Render, never in Netlify/`VITE_*`. Production must set `RETRIEVAL_BACKEND=bm25` so MiniLM and Chroma are not loaded.
 7. After the first deploy, copy the `https://….onrender.com` origin into Netlify `VITE_API_URL` and redeploy the frontend.
 
 `GET https://YOUR-RENDER-URL/health` should return `{"status":"ok"}`.  
-`GET https://YOUR-RENDER-URL/api/health` should show `llm_provider=groq` and `llm_available=true` when the Groq key is set.
+`GET https://YOUR-RENDER-URL/api/health` should show `llm_provider=groq`, `vector_database=bm25`, and `llm_available=true` when the Groq key is set.
 
-Render Free sleeps after idle time, has an ephemeral disk (Chroma/SQLite rebuild on boot from `knowledge/`), and may be tight on RAM because MiniLM still loads. This is a known limitation, not a second architecture.
+Render Free sleeps after idle time and has an ephemeral disk (SQLite knowledge chunks rebuild on boot from `knowledge/`). Local development still uses MiniLM+Chroma when `RETRIEVAL_BACKEND=hybrid`.
 
 Optional Docker Compose on a machine you already own still runs FastAPI + Ollama together. It is not required for the Netlify + Render path.
 
@@ -517,7 +518,7 @@ docker compose config
 - `llama3.2:3b` is small; answers depend heavily on retrieved passages and grounding.
 - SQLite + Chroma are single-instance; this stack is not horizontally scaled.
 - Render Free cannot run Ollama; production chat uses Groq (or OpenAI) via `LLM_PROVIDER`.
-- Render Free disks are ephemeral and the MiniLM embedder may strain 512 MB RAM.
+- Render Free uses `RETRIEVAL_BACKEND=bm25` (keyword retrieval over the same knowledge chunks) instead of MiniLM+Chroma, because 512 MB RAM cannot load sentence-transformers.
 - Nominatim geocoding needs outbound HTTP and is rate-limited.
 - No live Netlify or backend URL is included in this repo.
 - Uploaded PDFs persist in Docker only because `PDF_DIR=/data/pdfs` is on the data volume; seed Markdown stays in the image.

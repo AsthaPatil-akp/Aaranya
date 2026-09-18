@@ -32,6 +32,20 @@ def test_liveness_endpoint():
     assert response.json() == {"status": "ok"}
 
 
+def test_health_reports_bm25_when_configured(monkeypatch):
+    from app.core.config import get_settings
+
+    settings = get_settings()
+    monkeypatch.setattr(settings, "retrieval_backend", "bm25")
+    response = client.get("/api/health")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["vector_database"] == "bm25"
+    assert body["embedding_backend"] == "none"
+    assert body["chunks"] >= 8
+    assert body["vector_count"] >= 8
+
+
 def test_empty_chat_is_400():
     response = client.post("/api/chat", json={"message": ""})
     assert response.status_code == 400

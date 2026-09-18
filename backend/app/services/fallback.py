@@ -12,7 +12,6 @@ from pypdf import PdfReader
 
 from app.core.config import get_settings
 from app.models.schemas import EvidenceItem
-from app.services.embeddings import get_embedder
 
 LOGGER = logging.getLogger("darukaa.openalex")
 _OPENALEX_CACHE: dict[str, tuple[float, list[EvidenceItem]]] = {}
@@ -207,8 +206,15 @@ def search_openalex(
         LOGGER.warning("OpenAlex request failed: %s", exc)
         return []
 
-    embedder = get_embedder()
-    query_vec = embedder.encode([f"{cleaned} {environmental_context}".strip()])[0]
+    use_vectors = settings.uses_vector_index
+    query_vec = None
+    embedder = None
+    if use_vectors:
+        from app.services.embeddings import get_embedder
+
+        embedder = get_embedder()
+        query_vec = embedder.encode([f"{cleaned} {environmental_context}".strip()])[0]
+    query_tokens = set(re.findall(r"[a-z0-9]{4,}", f"{cleaned} {environmental_context}".lower()))
     keep = limit or settings.openalex_keep
     prelim: list[dict] = []
     for index, work in enumerate(works):
@@ -224,8 +230,12 @@ def search_openalex(
         if not abstract:
             continue
         passages = _best_passages(abstract, f"{cleaned} {environmental_context}")
-        passage_vec = embedder.encode(passages[:1])[0]
-        relevance = float(np.dot(query_vec, passage_vec))
+        if use_vectors and embedder is not None and query_vec is not None:
+            passage_vec = embedder.encode(passages[:1])[0]
+            relevance = float(np.dot(query_vec, passage_vec))
+        else:
+            pass_tokens = set(re.findall(r"[a-z0-9]{4,}", passages[0].lower()))
+            relevance = len(query_tokens & pass_tokens) / max(len(query_tokens), 1) if query_tokens else 0.0
         recency = 0.0
         if isinstance(year, int):
             recency = max(0.0, min(1.0, (year - 2005) / 20.0))
@@ -277,8 +287,12 @@ def search_openalex(
             if not extracted:
                 continue
             passages = _best_passages(extracted, f"{cleaned} {environmental_context}")
-            passage_vec = embedder.encode(passages[:1])[0]
-            relevance = float(np.dot(query_vec, passage_vec))
+            if use_vectors and embedder is not None and query_vec is not None:
+                passage_vec = embedder.encode(passages[:1])[0]
+                relevance = float(np.dot(query_vec, passage_vec))
+            else:
+                pass_tokens = set(re.findall(r"[a-z0-9]{4,}", passages[0].lower()))
+                relevance = len(query_tokens & pass_tokens) / max(len(query_tokens), 1) if query_tokens else 0.0
             item["passages"] = passages
             item["evidence_level"] = level or "full_text"
             item["relevance"] = relevance

@@ -15,14 +15,12 @@ from app.models.schemas import (
     IngestResponse,
     SearchRequest,
 )
-from app.services.embeddings import get_embedder
 from app.services.geocode import search_places
 from app.services.ingest import knowledge_store
 from app.services.llm import configured_llm_model, llm_is_available, llm_is_configured
 from app.services.memory import store
 from app.services.pipeline import handle_chat, handle_chat_stream
 from app.services.retrieval import retriever
-from app.services.vectorstore import get_chroma
 
 router = APIRouter(prefix="/api")
 
@@ -31,21 +29,37 @@ router = APIRouter(prefix="/api")
 def health() -> HealthResponse:
     settings = get_settings()
     docs, chunks = knowledge_store.stats()
-    embedder = get_embedder()
-    try:
-        vector_count = get_chroma().count()
-    except Exception:
-        vector_count = 0
+    if settings.uses_vector_index:
+        from app.services.embeddings import get_embedder
+        from app.services.vectorstore import get_chroma
+
+        embedder = get_embedder()
+        try:
+            vector_count = get_chroma().count()
+        except Exception:
+            vector_count = 0
+        embedding_backend = embedder.backend
+        embedding_model = embedder.model_name
+        embedding_dimension = embedder.dim
+        vector_database = "chromadb"
+        collection = settings.chroma_collection
+    else:
+        vector_count = chunks
+        embedding_backend = "none"
+        embedding_model = ""
+        embedding_dimension = 0
+        vector_database = "bm25"
+        collection = "sqlite-chunks"
     return HealthResponse(
         status="ok",
         app=settings.app_name,
         documents=docs,
         chunks=chunks,
-        embedding_backend=embedder.backend,
-        embedding_model=embedder.model_name,
-        embedding_dimension=embedder.dim,
-        vector_database="chromadb",
-        collection=settings.chroma_collection,
+        embedding_backend=embedding_backend,
+        embedding_model=embedding_model,
+        embedding_dimension=embedding_dimension,
+        vector_database=vector_database,
+        collection=collection,
         vector_count=vector_count,
         llm_provider=settings.llm_provider,
         llm_model=configured_llm_model(),

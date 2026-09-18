@@ -3,7 +3,6 @@ from __future__ import annotations
 import re
 from app.core.config import get_settings
 from app.models.schemas import ClaimEvidenceLink, EnvironmentalContext, EvidenceItem, KnowledgeStatus
-from app.services.embeddings import get_embedder
 from app.services.fallback import wants_recent_literature
 
 RESEARCH_INTENT = re.compile(
@@ -109,7 +108,6 @@ def verify_claims(
     evidence: list[EvidenceItem],
 ) -> list[ClaimEvidenceLink]:
     by_id = {item.evidence_id: item for item in evidence if item.evidence_id}
-    embedder = get_embedder()
     verified: list[ClaimEvidenceLink] = []
     for claim in claims:
         valid_ids = [eid for eid in claim.evidence_ids if eid in by_id]
@@ -125,8 +123,13 @@ def verify_claims(
         passages = [by_id[eid].passage for eid in valid_ids]
         claim_tokens = _content_tokens(claim.text)
         lexical = max(_overlap(claim_tokens, _content_tokens(p)) for p in passages)
-        vectors = embedder.encode([claim.text, *passages])
-        semantic = max(float(vectors[0] @ vectors[i]) for i in range(1, len(vectors)))
+        semantic = 0.0
+        if get_settings().uses_vector_index:
+            from app.services.embeddings import get_embedder
+
+            embedder = get_embedder()
+            vectors = embedder.encode([claim.text, *passages])
+            semantic = max(float(vectors[0] @ vectors[i]) for i in range(1, len(vectors)))
         numbers = NUMERIC_RE.findall(claim.text)
         numbers_ok = all(any(num.lower() in p.lower() for p in passages) for num in numbers)
         if numbers and not numbers_ok:

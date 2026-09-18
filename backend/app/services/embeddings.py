@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import hashlib
 from functools import lru_cache
 
 import numpy as np
@@ -17,6 +16,11 @@ class Embedder:
         self.model_name = settings.embedding_model
         self.dim = 384
         self._st_model = None
+        if not settings.uses_vector_index:
+            self.backend = "none"
+            self.model_name = ""
+            self.dim = 0
+            return
         if self.backend in {"sentence-transformers", "minilm", "semantic"}:
             from sentence_transformers import SentenceTransformer
 
@@ -34,7 +38,9 @@ class Embedder:
 
     def encode(self, texts: list[str]) -> np.ndarray:
         if not texts:
-            return np.zeros((0, self.dim), dtype=np.float32)
+            return np.zeros((0, max(self.dim, 1)), dtype=np.float32)
+        if self.backend in {"none", ""}:
+            return np.zeros((len(texts), max(self.dim, 1)), dtype=np.float32)
         if self.backend == "openai":
             return self._openai_encode(texts)
         assert self._st_model is not None
@@ -70,4 +76,6 @@ def get_embedder() -> Embedder:
 
 
 def content_checksum(text: str) -> str:
-    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+    from app.services.ingest import content_checksum as checksum
+
+    return checksum(text)

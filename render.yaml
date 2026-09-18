@@ -40,5 +40,7 @@ services:
         value: sentence-transformers
       - key: EMBEDDING_MODEL
         value: all-MiniLM-L6-v2
+      - key: RETRIEVAL_BACKEND
+        value: bm25
       - key: ADMIN_API_TOKEN
         sync: false

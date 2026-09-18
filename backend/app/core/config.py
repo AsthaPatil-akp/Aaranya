@@ -45,6 +45,7 @@ class Settings(BaseSettings):
 
     chroma_path: Path | None = None
     chroma_collection: str = "darukaa_knowledge"
+    retrieval_backend: str = "hybrid"
 
     llm_provider: str = "ollama"
     openai_api_key: str = ""
@@ -102,6 +103,10 @@ class Settings(BaseSettings):
         return items
 
     @property
+    def uses_vector_index(self) -> bool:
+        return self.retrieval_backend.lower().strip() not in {"bm25", "keyword", "lexical"}
+
+    @property
     def sqlite_path(self) -> Path:
         if self.sqlite_file:
             return Path(self.sqlite_file)
@@ -118,7 +123,8 @@ class Settings(BaseSettings):
         self.pdf_dir.mkdir(parents=True, exist_ok=True)
         self.source_dir.mkdir(parents=True, exist_ok=True)
         self.sqlite_path.parent.mkdir(parents=True, exist_ok=True)
-        self.resolved_chroma_path.mkdir(parents=True, exist_ok=True)
+        if self.uses_vector_index:
+            self.resolved_chroma_path.mkdir(parents=True, exist_ok=True)
 
 
 @lru_cache

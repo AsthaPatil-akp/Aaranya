@@ -44,3 +44,10 @@ def test_frontend_origin_is_merged_into_cors(monkeypatch) -> None:
 def test_production_cors_regex_is_opt_in() -> None:
     settings = Settings(_env_file=None, cors_origin_regex="")
     assert settings.cors_origin_regex == ""
+
+
+def test_retrieval_backend_bm25_skips_vector_index() -> None:
+    hybrid = Settings(_env_file=None, retrieval_backend="hybrid")
+    bm25 = Settings(_env_file=None, retrieval_backend="bm25")
+    assert hybrid.uses_vector_index is True
+    assert bm25.uses_vector_index is False

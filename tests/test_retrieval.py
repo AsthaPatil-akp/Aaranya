@@ -44,6 +44,37 @@ def test_semantic_retrieval_returns_scores_and_sources():
     assert hits[0].evidence_id.startswith("kb-")
 
 
+def test_bm25_backend_retrieves_sqlite_chunks():
+    hits = retriever._search_bm25("soil organic carbon cover crops rainfall", 6)
+    assert hits
+    assert hits[0].document_name
+    assert hits[0].passage
+    assert hits[0].evidence_id.startswith("kb-")
+    assert hits[0].relevance_score is not None
+
+
+def test_search_uses_bm25_when_configured(monkeypatch):
+    monkeypatch.setattr(retriever.settings, "retrieval_backend", "bm25")
+    hits = retriever.search("monoculture agroforestry habitat diversity")
+    assert hits
+    assert hits[0].origin == "knowledge_base"
+
+
+def test_embedder_skips_minilm_when_bm25(monkeypatch):
+    from app.core.config import get_settings
+    from app.services.embeddings import Embedder, get_embedder
+
+    settings = get_settings()
+    monkeypatch.setattr(settings, "retrieval_backend", "bm25")
+    get_embedder.cache_clear()
+    try:
+        model = Embedder()
+        assert model.backend == "none"
+        assert model._st_model is None
+    finally:
+        get_embedder.cache_clear()
+
+
 def test_filename_sanitization():
     assert ".." not in sanitize_filename("../../secret.pdf")
     assert sanitize_filename("ok_file.pdf") == "ok_file.pdf"

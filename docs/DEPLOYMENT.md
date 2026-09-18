@@ -43,6 +43,7 @@ Ollama does not run on Render Free. Use Groq (free API key from https://console.
 - Start: `uvicorn app.main:app --host 0.0.0.0 --port $PORT`
 - `PYTHONPATH=backend`
 - `LLM_PROVIDER=groq`
+- `RETRIEVAL_BACKEND=bm25` (does not load MiniLM or Chroma)
 - `GROQ_API_KEY` set in the Render dashboard (not in git)
 
 Confirm:

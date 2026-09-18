@@ -80,17 +80,27 @@ def _debug_base(payload: ChatRequest, settings, query: str, original: str) -> De
     if not payload.debug:
         return None
     embedder_backend = settings.embedding_backend
-    try:
-        from app.services.embeddings import get_embedder
+    dim = 0
+    backend = embedder_backend
+    model = settings.embedding_model
+    vector_database = "chromadb"
+    collection = settings.chroma_collection
+    if settings.uses_vector_index:
+        try:
+            from app.services.embeddings import get_embedder
 
-        embedder = get_embedder()
-        dim = embedder.dim
-        backend = embedder.backend
-        model = embedder.model_name
-    except Exception:
+            embedder = get_embedder()
+            dim = embedder.dim
+            backend = embedder.backend
+            model = embedder.model_name
+        except Exception:
+            dim = 0
+    else:
+        backend = "none"
+        model = ""
         dim = 0
-        backend = embedder_backend
-        model = settings.embedding_model
+        vector_database = "bm25"
+        collection = "sqlite-chunks"
     return DebugRetrieval(
         original_query=original,
         query=query,
@@ -99,8 +109,8 @@ def _debug_base(payload: ChatRequest, settings, query: str, original: str) -> De
         backend=backend,
         embedding_model=model,
         embedding_dimension=dim,
-        vector_database="chromadb",
-        collection=settings.chroma_collection,
+        vector_database=vector_database,
+        collection=collection,
         llm_provider=settings.llm_provider,
         llm_model=configured_llm_model(),
         llm_configured=llm_is_configured(),

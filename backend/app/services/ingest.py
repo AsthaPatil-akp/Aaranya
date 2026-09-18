@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 from datetime import datetime, timezone
@@ -9,9 +10,7 @@ from typing import Any
 from pypdf import PdfReader
 
 from app.core.config import get_settings
-from app.services.embeddings import content_checksum
 from app.services.memory import connect, init_db
-from app.services.vectorstore import get_chroma, reset_chroma_singleton
 
 TOPIC_HINTS = {
     "soil": "soil_health",
@@ -35,6 +34,10 @@ TOPIC_HINTS = {
 }
 
 FRONTMATTER_RE = re.compile(r"^---\s*\n(.*?)\n---\s*\n", re.S)
+
+
+def content_checksum(text: str) -> str:
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
 def clean_text(text: str) -> str:
@@ -141,6 +144,16 @@ class KnowledgeStore:
     def invalidate_caches(self) -> None:
         self._chunks_cache = None
         try:
+            from app.services.retrieval import retriever
+
+            retriever.invalidate_bm25()
+        except Exception:
+            pass
+        if not get_settings().uses_vector_index:
+            return
+        try:
+            from app.services.vectorstore import get_chroma
+
             get_chroma()._count_cache = None
         except Exception:
             pass
@@ -307,6 +320,10 @@ class KnowledgeStore:
 
     def rebuild_vectors(self) -> None:
         self.invalidate_caches()
+        if not get_settings().uses_vector_index:
+            return
+        from app.services.vectorstore import get_chroma, reset_chroma_singleton
+
         chunks = self.load_chunks()
         reset_chroma_singleton()
         store = get_chroma()
@@ -315,7 +332,12 @@ class KnowledgeStore:
             store.upsert_chunks(chunks)
 
     def chroma_count(self) -> int:
+        if not get_settings().uses_vector_index:
+            _docs, chunks = self.stats()
+            return chunks
         try:
+            from app.services.vectorstore import get_chroma
+
             return get_chroma().count()
         except Exception:
             return 0
