@@ -147,10 +147,10 @@ describe("action plan PDF data", () => {
     });
   });
 
-  it("renders a PDF for sparse and complete plans", () => {
-    const sparse = renderActionPlanPdf(buildActionPlan(baseResponse, EMPTY_LAND_DETAILS));
-    expect(sparse.output("arraybuffer").byteLength).toBeGreaterThan(500);
-    const complete = renderActionPlanPdf(
+  it("renders a PDF for sparse and complete plans", async () => {
+    const sparse = await renderActionPlanPdf(buildActionPlan(baseResponse, EMPTY_LAND_DETAILS));
+    expect(sparse.bytes.byteLength).toBeGreaterThan(500);
+    const complete = await renderActionPlanPdf(
       buildActionPlan(
         {
           ...baseResponse,
@@ -184,12 +184,12 @@ describe("action plan PDF data", () => {
         { ...EMPTY_LAND_DETAILS, crop: "wheat", farm_size: "5 acres" },
       ),
     );
-    expect(complete.getNumberOfPages()).toBeGreaterThanOrEqual(1);
-    expect(complete.output("arraybuffer").byteLength).toBeGreaterThan(sparse.output("arraybuffer").byteLength);
+    expect(complete.pageCount).toBeGreaterThanOrEqual(1);
+    expect(complete.bytes.byteLength).toBeGreaterThan(sparse.bytes.byteLength);
   });
 
-  it("renders recommendation markdown as a PDF table without pipe syntax", () => {
-    const doc = renderActionPlanPdf(
+  it("renders recommendation markdown as a PDF table without pipe syntax", async () => {
+    const doc = await renderActionPlanPdf(
       buildActionPlan(
         {
           ...baseResponse,
@@ -244,7 +244,7 @@ describe("action plan PDF data", () => {
     expect(text).toContain("Keep residue");
   });
 
-  it("renders a full action-plan sample without raw markdown or letter-spacing", () => {
+  it("renders a full action-plan sample without raw markdown or letter-spacing", async () => {
     const assistantMessage = `## Assessment Summary
 
 Your 5 acre wheat field in a semi-arid region has low soil organic carbon and low soil moisture. Drought-tolerant cover is a better fit than dense planting.
@@ -283,7 +283,7 @@ Cover, trees and flowers address soil carbon, habitat and pollinators together r
 
 Local trials are still needed before promising a specific yield or species response.
 `;
-    const doc = renderActionPlanPdf(
+    const doc = await renderActionPlanPdf(
       buildActionPlan(
         {
           ...baseResponse,
@@ -359,7 +359,7 @@ Local trials are still needed before promising a specific yield or species respo
     expect(text).not.toMatch(/C o v e r/);
   });
 
-  it("normalizes inline ATX headings and keeps normal character spacing", () => {
+  it("normalizes inline ATX headings and keeps normal character spacing", async () => {
     const assistantMessage = [
       "Your 5 acre wheat field sits in a semi-arid zone with low, irregular rainfall. The soil dries quickly, suggesting limited water holding capacity. ## What to investigate first",
       "1. **Measure soil organic carbon**: A baseline SOC value will tell you how much carbon input is needed.",
@@ -378,7 +378,7 @@ Local trials are still needed before promising a specific yield or species respo
     expect(sections.investigate_first).toContain("Measure soil organic carbon");
     expect(sections.investigate_first).not.toContain("##");
 
-    const doc = renderActionPlanPdf(
+    const doc = await renderActionPlanPdf(
       buildActionPlan(
         {
           ...baseResponse,

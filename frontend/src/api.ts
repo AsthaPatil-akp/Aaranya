@@ -147,10 +147,38 @@ export async function postChatStream(
 }
 
 export async function searchLocations(query: string): Promise<{ label: string; latitude: number; longitude: number }[]> {
-  const response = await fetch(`${API}/api/geocode?q=${encodeURIComponent(query)}`);
+  const text = query.trim();
+  if (text.length < 2) return [];
+  if (API) {
+    try {
+      const response = await fetch(`${API}/api/geocode?q=${encodeURIComponent(text)}`);
+      if (response.ok) {
+        const rows = await response.json();
+        if (Array.isArray(rows) && rows.length) return rows;
+      }
+    } catch {
+      /* Fall through to the public geocoder so the map still updates. */
+    }
+  }
+  const response = await fetch(`https://photon.komoot.io/api/?q=${encodeURIComponent(text)}&limit=5`);
   if (!response.ok) throw new Error(await readError(response, "Location search failed"));
-  const rows = await response.json();
-  return Array.isArray(rows) ? rows : [];
+  const payload = (await response.json()) as {
+    features?: Array<{ properties?: Record<string, string>; geometry?: { coordinates?: number[] } }>;
+  };
+  const rows: { label: string; latitude: number; longitude: number }[] = [];
+  for (const feature of payload.features || []) {
+    const coords = feature.geometry?.coordinates;
+    if (!coords || coords.length < 2) continue;
+    const longitude = Number(coords[0]);
+    const latitude = Number(coords[1]);
+    if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) continue;
+    const props = feature.properties || {};
+    const parts = ["name", "city", "county", "state", "country"]
+      .map((key) => String(props[key] || "").trim())
+      .filter((value, index, all) => value && all.indexOf(value) === index);
+    rows.push({ label: parts.join(", ") || text, latitude, longitude });
+  }
+  return rows;
 }
 
 export async function listKnowledge() {

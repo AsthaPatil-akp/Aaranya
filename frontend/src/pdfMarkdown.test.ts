@@ -44,6 +44,17 @@ describe("PDF markdown parsing", () => {
     expect(blocks[0].items[1].title).toBe("Assess soil moisture");
   });
 
+  it("drops leftover numbered markers like '3. 3.'", () => {
+    const blocks = parsePdfBlocks("1. Measure SOC\n2. Soil moisture\n3. 3\n3. Existing cover crop or residue use");
+    expect(blocks[0].type).toBe("ordered-list");
+    if (blocks[0].type !== "ordered-list") return;
+    expect(blocks[0].items.map((item) => item.title)).toEqual([
+      "Measure SOC",
+      "Soil moisture",
+      "Existing cover crop or residue use",
+    ]);
+  });
+
   it("splits inline ATX headings without touching URLs or C# tokens", () => {
     const split = splitInlineAtxHeadings(
       "Low soil organic carbon can reduce biodiversity. ## What to investigate first\nSee https://example.com/path#section and C# notes. ### Soil notes",

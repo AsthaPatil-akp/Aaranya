@@ -214,7 +214,9 @@ export function Lab() {
                   type="button"
                   className="btn inverse download-plan"
                   data-testid="download-action-plan"
-                  onClick={() => downloadActionPlanPdf(turn.payload!, landDetails)}
+                  onClick={() => {
+                    void downloadActionPlanPdf(turn.payload!, landDetails);
+                  }}
                 >
                   Download Action Plan PDF
                 </button>

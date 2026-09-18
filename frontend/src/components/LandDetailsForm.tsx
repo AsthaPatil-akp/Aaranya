@@ -33,6 +33,16 @@ function Field({
   );
 }
 
+function parseTypedCoordinates(text: string): { latitude: number; longitude: number } | null {
+  const match = text.trim().match(/^(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)$/);
+  if (!match) return null;
+  const latitude = Number(match[1]);
+  const longitude = Number(match[2]);
+  if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) return null;
+  if (Math.abs(latitude) > 90 || Math.abs(longitude) > 180) return null;
+  return { latitude, longitude };
+}
+
 export function LandDetailsForm({ details, onChange, onClose, enableMap = true }: Props) {
   const [query, setQuery] = useState(details.location);
   const [results, setResults] = useState<{ label: string; latitude: number; longitude: number }[]>([]);
@@ -95,6 +105,13 @@ export function LandDetailsForm({ details, onChange, onClose, enableMap = true }
     event?.preventDefault();
     const text = queryRef.current.trim();
     patch({ location: text });
+    const coords = parseTypedCoordinates(text);
+    if (coords) {
+      applyPlace({ label: text, ...coords }, text);
+      setResults([]);
+      setSearchError(null);
+      return;
+    }
     if (text.length < 2) {
       setResults([]);
       return;
@@ -141,6 +158,8 @@ export function LandDetailsForm({ details, onChange, onClose, enableMap = true }
 
   const lat = details.latitude.trim() ? Number(details.latitude) : null;
   const lng = details.longitude.trim() ? Number(details.longitude) : null;
+  const hasPoint = lat != null && lng != null && Number.isFinite(lat) && Number.isFinite(lng);
+  const pointKey = hasPoint ? `${lat.toFixed(5)},${lng.toFixed(5)}` : "empty";
 
   const dialog = (
     <div
@@ -254,7 +273,11 @@ export function LandDetailsForm({ details, onChange, onClose, enableMap = true }
             <input
               value={query}
               onChange={(event) => setQuery(event.target.value)}
-              onBlur={() => patch({ location: query.trim() })}
+              onBlur={() => {
+                const text = query.trim();
+                patch({ location: text });
+                if (text.length >= 2) void search(undefined, "suggest");
+              }}
               placeholder="Search a place or type a location"
               onKeyDown={(event) => {
                 if (event.key === "Enter") {
@@ -289,8 +312,9 @@ export function LandDetailsForm({ details, onChange, onClose, enableMap = true }
           {enableMap && !mapExpanded && (
             <div className="land-map-stage" data-testid="land-map-stage">
               <LocationPicker
-                latitude={Number.isFinite(lat) ? lat : null}
-                longitude={Number.isFinite(lng) ? lng : null}
+                key={pointKey}
+                latitude={hasPoint ? lat : null}
+                longitude={hasPoint ? lng : null}
                 onSelect={(nextLat, nextLng) => patch({ latitude: String(nextLat), longitude: String(nextLng) })}
               />
               <button type="button" className="btn ghost" onClick={() => setMapExpanded(true)}>
@@ -318,12 +342,13 @@ export function LandDetailsForm({ details, onChange, onClose, enableMap = true }
                     </button>
                   </div>
                 </div>
-                <LocationPicker
-                  expanded
-                  latitude={Number.isFinite(lat) ? lat : null}
-                  longitude={Number.isFinite(lng) ? lng : null}
-                  onSelect={(nextLat, nextLng) => patch({ latitude: String(nextLat), longitude: String(nextLng) })}
-                />
+                  <LocationPicker
+                    expanded
+                    key={`expanded-${pointKey}`}
+                    latitude={hasPoint ? lat : null}
+                    longitude={hasPoint ? lng : null}
+                    onSelect={(nextLat, nextLng) => patch({ latitude: String(nextLat), longitude: String(nextLng) })}
+                  />
               </div>,
               document.body,
             )}

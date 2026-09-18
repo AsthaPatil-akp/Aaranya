@@ -16,11 +16,25 @@ export function LocationPicker({ latitude, longitude, onSelect, expanded = false
   const onSelectRef = useRef(onSelect);
   onSelectRef.current = onSelect;
 
+  function placeMarker(map: L.Map, lat: number, lng: number) {
+    markerRef.current?.remove();
+    markerRef.current = L.circleMarker([lat, lng], {
+      radius: 8,
+      color: "#16382c",
+      fillColor: "#c6e07a",
+      fillOpacity: 1,
+      weight: 2,
+    }).addTo(map);
+    map.setView([lat, lng], Math.max(map.getZoom() || 4, 11));
+    window.setTimeout(() => map.invalidateSize(), 50);
+    window.setTimeout(() => map.invalidateSize(), 220);
+  }
+
   useEffect(() => {
     if (!hostRef.current || mapRef.current) return;
     const start: L.LatLngExpression =
       latitude != null && longitude != null ? [latitude, longitude] : [22.5, 79];
-    const map = L.map(hostRef.current, { scrollWheelZoom: false }).setView(start, latitude != null ? 10 : 4);
+    const map = L.map(hostRef.current, { scrollWheelZoom: false }).setView(start, latitude != null ? 11 : 4);
     L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
       attribution: "&copy; OpenStreetMap",
       maxZoom: 18,
@@ -29,6 +43,7 @@ export function LocationPicker({ latitude, longitude, onSelect, expanded = false
       onSelectRef.current(Number(event.latlng.lat.toFixed(5)), Number(event.latlng.lng.toFixed(5)));
     });
     mapRef.current = map;
+    if (latitude != null && longitude != null) placeMarker(map, latitude, longitude);
     const redraw = () => map.invalidateSize();
     setTimeout(redraw, 80);
     setTimeout(redraw, 250);
@@ -47,15 +62,7 @@ export function LocationPicker({ latitude, longitude, onSelect, expanded = false
   useEffect(() => {
     const map = mapRef.current;
     if (!map || latitude == null || longitude == null) return;
-    markerRef.current?.remove();
-    markerRef.current = L.circleMarker([latitude, longitude], {
-      radius: 8,
-      color: "#16382c",
-      fillColor: "#c6e07a",
-      fillOpacity: 1,
-      weight: 2,
-    }).addTo(map);
-    map.setView([latitude, longitude], Math.max(map.getZoom(), 8));
+    placeMarker(map, latitude, longitude);
   }, [latitude, longitude]);
 
   useEffect(() => {

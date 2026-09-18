@@ -62,6 +62,17 @@ describe("LandDetailsForm", () => {
     expect(JSON.parse(screen.getByTestId("payload").textContent || "{}").location).toBe("shah");
   });
 
+  it("pins the map when coordinates are typed", () => {
+    render(<Harness />);
+    fireEvent.change(screen.getByPlaceholderText("Search a place or type a location"), {
+      target: { value: "19.45, 73.33" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Search" }));
+    const stored = JSON.parse(screen.getByTestId("payload").textContent || "{}");
+    expect(stored.latitude).toBe("19.45");
+    expect(stored.longitude).toBe("73.33");
+  });
+
   it("stores coordinates from a location search result", async () => {
     render(<Harness />);
     fireEvent.change(screen.getByPlaceholderText("Search a place or type a location"), {

@@ -110,14 +110,12 @@ export function parsePdfBlocks(markdown: string): PdfBlock[] {
   let previousBlank = false;
 
   const flushLists = () => {
-    if (ordered.length) {
-      blocks.push({ type: "ordered-list", items: ordered });
-      ordered = [];
-    }
-    if (bullets.length) {
-      blocks.push({ type: "unordered-list", items: bullets });
-      bullets = [];
-    }
+    const items = ordered.filter((item) => item.title && !/^\d+[.)]*$/.test(item.title.trim()));
+    if (items.length) blocks.push({ type: "ordered-list", items });
+    ordered = [];
+    const kept = bullets.filter((item) => item.trim());
+    if (kept.length) blocks.push({ type: "unordered-list", items: kept });
+    bullets = [];
   };
 
   for (const raw of lines) {
@@ -149,7 +147,9 @@ export function parsePdfBlocks(markdown: string): PdfBlock[] {
       flushLists();
       blocks.push({
         type: "ordered-list",
-        items: runOn.map((item) => splitTitleBody(item.replace(/^\d+[.)]\s+/, ""))),
+        items: runOn
+          .map((item) => splitTitleBody(item.replace(/^\d+[.)]\s+/, "")))
+          .filter((item) => item.title && !/^\d+[.)]*$/.test(item.title.trim())),
       });
       previousBlank = false;
       continue;
@@ -159,10 +159,11 @@ export function parsePdfBlocks(markdown: string): PdfBlock[] {
     if (marker?.ordered) {
       flushParagraph(paragraph, blocks);
       if (bullets.length) {
-        blocks.push({ type: "unordered-list", items: bullets });
+        blocks.push({ type: "unordered-list", items: bullets.filter((item) => item.trim()) });
         bullets = [];
       }
-      ordered.push(splitTitleBody(marker.rest));
+      const item = splitTitleBody(marker.rest);
+      if (item.title && !/^\d+[.)]*$/.test(item.title.trim())) ordered.push(item);
       previousBlank = false;
       continue;
     }
